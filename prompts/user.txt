@@ -1,0 +1,12 @@
+read the following document and extract values into the json schema.
+The attached document is called a Letter of advice, or LOA.  IT is a formal communication between DFO and a proponent who is proposing to conduct some activity in a place that may have an impact on fish or fish habitat.  The letter has a section that outlines the  activity that the proponent wants to do and any impacted area or areas of fish habitat.   Also, the letter will have a section that may   identify fish or fish habitat that would be impacted by the proposed activity.  We are interested in learning.  there may additionally be some description of the purpose of the activity.  
+We are interested in extracting a few piees of information from this letter, including:
+1) Impacting Activities:  the activities that will have impact on fish or fish habitat.    
+2) Impacted Area:  the size of the area that each of these activities will impact. 
+For example,  one letter describes one impact as: "Conduct open-water disposal of 5,000-7,000m3 of dredged sediments in Lake Erie"  and another activity as: "Sediments being deposited back into Lake Erie will be placed across an area of approximately 8,000m2". The impacting activities here would be "Dredging" and "Disposal of dredging sediments".  The impacted area would be 8000m2. make sure to return the units of the impacted area.  
+
+3) Navigation:  we are also interested in whether the project is related to navigation in waterways.  clues to this would include navigation-related words such as "marina" or "navigation channel". in this case we would return the words marina and navigation channel" 
+
+4) Impacted Species:  lastly, we are interested in species that might be affected.  these species are usually presented in a list, preceded by text similar to this: "We understand the following aquatic species listed under the Species at Risk Act may use the area in the vicinity of where your proposal is to be located" . Return the list of species.
+
+For all the requested items,  also return the sentence that contains the information required in the sentence source key.

@@ -1,0 +1,178 @@
+MOCK-UP DATA ONLY — FOR TESTING PURPOSES
+This document contains fabricated names, numbers, locations, and decisions. It is not an official authorization and must not be used for real-world planning, compliance, or regulatory purposes.
+
+Fisheries and Oceans Canada — Habitat Review Unit (MOCK)
+Pacific Region — Lower Fraser Area Office (MOCK)
+Phone: (604) 555-0138 (MOCK)   Email: habitat.review@example.invalid (MOCK)
+
+Date: January 22, 2026
+Our File: FR-TEST-2026-0042 (MOCK)
+PATH authorization number: PATH-2026-FR-01984
+
+To (Addressee):
+RiverStone Civil Works Ltd. (Attn: Ms. Jordan Lee, Environmental Compliance Manager)
+1040 Riverfront Parkway, Suite 300 (MOCK Address)
+Chilliwack, BC V2P 0A1 (MOCK)
+
+Re (Subject of the letter):
+PATH Review Decision — Fraser River Side-Channel Salmon Habitat Enhancement (Ansedagan Creek Confluence Area) (MOCK)
+
+------------------------------------------------------------
+Extraction-friendly key details (MOCK)
+the name of the addressee: RiverStone Civil Works Ltd. (Attn: Ms. Jordan Lee)
+Is the addressee likely a person or a legal entity: Legal entity (company)
+subject of the letter: PATH Review Decision — Fraser River Side-Channel Salmon Habitat Enhancement (Ansedagan Creek Confluence Area)
+PATH authorization number: PATH-2026-FR-01984
+List of the proposed activities separated by a semicolon: Site access and staging; Temporary in-water isolation and dewatering; Fish salvage and release; Excavation of accumulated fine sediment; Installation of large woody debris structures; Placement of spawning gravel; Bank regrading and riparian planting; Demobilization and site cleanup
+result of the review decision: Authorized with conditions (MOCK decision)
+name of the person writing the letter: Alexandra Chen
+------------------------------------------------------------
+
+Dear Ms. Lee,
+
+This letter communicates the outcome of a mock review conducted under a fictionalized “PATH” process for the purpose of testing OCR and information extraction workflows. The scenario involves short-duration works near the confluence of Ansedagan Creek and the Fraser River. The purpose of the project is to improve off-channel habitat function for Pacific salmon while reducing chronic fine sediment input and localized bank erosion.
+
+This document is intentionally written in a narrative style and includes repeated identifiers and explicit impact sizing to support automated extraction. None of the content should be interpreted as policy, guidance, or a real regulatory decision.
+
+1. Project overview (MOCK)
+
+RiverStone Civil Works Ltd. proposes a late-summer habitat enhancement and bank stability project on a side-channel margin connected to the Fraser River. The work is intended to improve juvenile rearing access, increase cover complexity, and restore substrate conditions suitable for spawning and incubation in targeted patches.
+
+The project area is described (for mock realism) as a low-gradient margin with mixed substrates (sand, fine gravel, and patchy cobble). Riparian cover includes willow and red-osier dogwood, with pockets of alder on the upper bench. Habitat features include shallow glide margins, seasonal turbidity pulses during rainfall events, and localized areas of fine sediment accumulation.
+
+2. Fraser River salmon context (MOCK)
+
+The Fraser River watershed supports salmon populations of ecological, cultural, and economic importance. For the purpose of this mock assessment, the following species are assumed to be present or potentially present within the broader project reach:
+
+- Chinook salmon (Oncorhynchus tshawytscha): adult migration corridor use and possible localized spawning in suitable gravel pockets.
+- Sockeye salmon (Oncorhynchus nerka): migration corridor use; sensitivity to sediment deposition in spawning areas.
+- Coho salmon (Oncorhynchus kisutch): juvenile rearing in low-velocity off-channel habitats, particularly where cover and riparian shade are present.
+- Chum salmon (Oncorhynchus keta): potential spawning in lower-gradient side channels depending on flow and substrate.
+- Pink salmon (Oncorhynchus gorbuscha): possible periodic use of side-channel habitat when connectivity and suitable substrates occur.
+
+Key habitat functions relevant to this mock review include:
+- Adult migration corridor function along the mainstem.
+- Potential localized spawning and egg incubation in gravel patches.
+- Juvenile rearing, refuge, and foraging along low-velocity margins.
+- Riparian contributions of shade, bank stability, and terrestrial invertebrate input.
+
+3. Proposed activities (MOCK)
+
+List of the proposed activities separated by a semicolon:
+Site access and staging; Temporary in-water isolation and dewatering; Fish salvage and release; Excavation of accumulated fine sediment; Installation of large woody debris structures; Placement of spawning gravel; Bank regrading and riparian planting; Demobilization and site cleanup
+
+4. Activity-by-activity effects assessment (impacts and sizes) (MOCK)
+
+The impact of each of the activities is described below. Where possible, the size of the impact is listed explicitly (area, volume, turbidity, distance, or duration).
+
+4.1 Site access and staging
+Impact:
+The primary impact is localized soil disturbance and the potential for sediment-laden runoff if rainfall occurs during exposed soil conditions. Secondary impacts include temporary noise and vibration that may disturb nearby wildlife. No direct in-water disturbance is expected from staging itself when located above the ordinary high water mark.
+Size of impact if listed:
+Estimated disturbed area: 450 m2 (existing disturbed bench); duration: up to 7 days; in-water footprint: 0 m2.
+
+4.2 Temporary in-water isolation and dewatering
+Impact:
+The primary impact is short-term alteration of micro-habitat conditions within the isolated footprint, including reduced wetted area and temporary loss of habitat availability during dewatering. If water management is inadequate, localized changes in dissolved oxygen and water temperature could occur within the isolated zone. Downstream flows must be maintained to avoid stranding or passage impairment.
+Size of impact if listed:
+Isolation footprint: approximately 18 m by 6 m (about 108 m2); dewatering duration: up to 36 hours per work segment; minimum bypass flow maintained: 0.12 m3/s (MOCK value).
+
+4.3 Fish salvage and release
+Impact:
+The primary impact is handling stress, temporary displacement, and short-term interruption of local habitat use by fish captured within the isolated area. If salvage is incomplete, there is residual risk of stranding when dewatering proceeds. Proper handling, minimal holding time, and release into suitable low-velocity habitat reduce risk.
+Size of impact if listed:
+Salvage area: approximately 108 m2; expected salvage duration: 2 to 4 hours; maximum holding time per fish: 30 minutes (MOCK standard); expected salvage crew: 2 trained staff plus QEM (MOCK).
+
+4.4 Excavation of accumulated fine sediment
+Impact:
+The primary impact is short-term turbidity and sediment mobilization, particularly if excavation occurs near flowing water interfaces. Disturbance may temporarily reduce benthic invertebrate abundance within the footprint. If containment is effective, turbidity is expected to be short-lived and localized.
+Size of impact if listed:
+Excavation volume: up to 35 m3; active excavation days: 2 days; maximum turbidity increase at 50 m downstream: 15 NTU above background for no more than 6 hours/day (MOCK threshold).
+
+4.5 Installation of large woody debris structures
+Impact:
+The primary impact is localized bed and bank disturbance during placement. Over time, structures may alter flow patterns, promoting localized scour and sorting of substrate. This can increase habitat complexity, but the structures require stable anchoring to prevent displacement during high flows.
+Size of impact if listed:
+Number of structures: 5 key pieces; footprint per piece: about 3 m by 1 m; placement duration: 1 day; anticipated localized scour depth near structures: up to 0.25 m during the first high-flow season (MOCK estimate).
+
+4.6 Placement of spawning gravel
+Impact:
+The primary impact is temporary turbidity during placement and short-term displacement of existing substrate within the placement zone. The intended longer-term effect is beneficial by improving substrate quality for spawning and incubation in targeted patches, provided that gravel sizing and placement depth are appropriate and the site remains stable.
+Size of impact if listed:
+Gravel volume: 22 m3; placement area: about 120 m2; placement duration: 1 day; maximum turbidity increase at 50 m downstream: 10 NTU above background for no more than 4 hours/day (MOCK threshold).
+
+4.7 Bank regrading and riparian planting
+Impact:
+The primary impact is temporary exposure of soils and removal of some ground cover, increasing erosion risk until stabilization is achieved. Long-term effects are expected to be beneficial through improved bank stability, increased shading, and enhanced riparian inputs supporting aquatic food webs.
+Size of impact if listed:
+Bank length treated: 32 m; maximum cut/fill depth: 0.6 m; total disturbed bank area: about 190 m2; planting density: 1 plant per 1.5 m2 (MOCK).
+
+4.8 Demobilization and site cleanup
+Impact:
+The primary impact is minor disturbance during removal of temporary works. If isolation materials are removed abruptly, a short turbidity pulse may occur; controlled removal reduces this risk. Site cleanup reduces residual risk by ensuring waste is removed and erosion controls remain effective.
+Size of impact if listed:
+Demobilization duration: 1 day; final turbidity pulse target at 50 m downstream: no more than 5 NTU above background (MOCK target).
+
+5. Mitigation measures considered (MOCK)
+
+The following mitigation measures are described in plain language for testing purposes:
+
+- Maintain machinery above the high water mark unless explicitly required for isolated work.
+- Refuel and service equipment only in a designated upland staging area with spill kits present.
+- Install erosion and sediment controls prior to disturbance (e.g., silt fence, straw wattles, covered stockpiles).
+- Conduct fish salvage under trained personnel prior to dewatering and excavation.
+- Monitor turbidity at an upstream reference point and a downstream compliance point; pause work if thresholds are exceeded.
+- Stabilize exposed soils promptly, replant disturbed areas with native riparian species, and maintain controls until vegetation is established.
+- Remove temporary isolation measures carefully to avoid sudden sediment release.
+
+6. Monitoring and reporting (MOCK)
+
+Environmental monitoring:
+A Qualified Environmental Monitor (QEM) is assumed to be present during in-water isolation, fish salvage, excavation, gravel placement, and structure installation. The QEM will document weather, flow conditions, and any deviations from the planned sequence.
+
+Turbidity monitoring:
+Turbidity will be measured at an upstream reference point and a downstream compliance point approximately 50 m downstream of the work area. Measurements will be taken at least hourly during active disturbance. The mock thresholds referenced are 15 NTU above background (excavation) and 10 NTU above background (gravel placement). A stop-work trigger applies if thresholds persist beyond 30 minutes (MOCK trigger).
+
+Fish salvage records:
+Fish salvage results will be recorded by species (where possible), life stage, and counts. Any mortalities will be recorded and reported immediately. Fish will be held briefly in aerated containers and released to suitable low-velocity habitat outside the isolated area.
+
+Post-work inspection:
+Within 48 hours of demobilization, a post-work inspection will confirm bank stability, function of erosion controls, and structure stability. A follow-up inspection is assumed after the first significant rainfall event or freshet period.
+
+7. Decision (MOCK)
+
+result of the review decision: Authorized with conditions (MOCK decision)
+
+Based on the information provided in this mock scenario and the mitigation measures described above, the proposed works are considered eligible for a mock PATH authorization. Authorization is contingent on implementing the described mitigation and monitoring measures, including effective in-water isolation, fish salvage prior to dewatering, sediment controls, and turbidity monitoring.
+
+If site conditions differ materially from those assumed (for example, higher-than-expected flows, discovery of salmon redds within the footprint, or inability to isolate effectively), the proponent must pause in-water works and consult the reviewing authority (MOCK) before proceeding.
+
+8. Conditions of the mock authorization (MOCK)
+
+Condition 1 — Timing window:
+In-water works are limited to August 15 through September 30, inclusive (MOCK window), unless amended in writing.
+
+Condition 2 — Isolation and salvage:
+No in-water excavation or gravel placement may occur until isolation is installed and fish salvage is completed under QEM oversight.
+
+Condition 3 — Turbidity controls:
+If turbidity at the downstream compliance point exceeds 15 NTU above background for more than 30 minutes during excavation, work must stop and corrective actions must be implemented before resuming (MOCK).
+
+Condition 4 — Spill prevention:
+A spill kit must be on site at all times during construction. Refueling must occur only in the upland staging area.
+
+Condition 5 — Reporting:
+Within 10 business days after completion, submit a completion report summarizing: dates of in-water works, turbidity readings, fish salvage counts, representative photos, and a list of incidents or deviations (MOCK requirement).
+
+9. Closing (MOCK)
+
+If you have questions regarding this mock letter, please contact the undersigned.
+
+Sincerely,
+
+Alexandra Chen
+Senior Habitat Biologist (MOCK)
+Fisheries and Oceans Canada — Pacific Region (MOCK)
+Email: alexandra.chen@example.invalid   Phone: (604) 555-0138 (MOCK)
+
+cc (MOCK): Fraser River Salmon Habitat Team; Proponent Project File

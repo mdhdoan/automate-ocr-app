@@ -1,0 +1,7 @@
+{
+  "field_list": "the name of the addressee\nIs the addressee likely a person or a legal entity\nsubject of the letter\nPATH authorization number\nthe proposed activities, separated by a semicolon\nthe impact of each of the activities\nthe size of the impact if it is listed\nresult of the review decision\nname of the person writing the letter",
+  "user_prompt": "This is a letter of authorization.  in these letters, DFO formally acknowledges receipt of a proponent's proposal to conduct works or activities on a waterway. it outlines the result of a review determining whether this work may cause damage to fish or fish habitat, and whether proposed mitigation measures are sufficient to prevent such harm. It provides a decision on the request and advises the proponent of their obligations under the authorization.  Based on this description, extract the fields above from the full text of the letter.",
+  "ocr_model": "mistral-small3.2",
+  "extract_model": "gpt-oss",
+  "dpi": 200
+}

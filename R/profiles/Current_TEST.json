@@ -1,0 +1,7 @@
+{
+  "field_list": "What is the agreement ID\nWho is the lead organization\nWhat's the date of the agreement\nWhat is the project duration\nWhat's the title of the agreement\nWhat's the total money involved",
+  "user_prompt": "This is a legal document between 2 entities. The information might be spreadout through the entire document",
+  "ocr_model": "mistral-small3.2",
+  "extract_model": "gpt-oss",
+  "dpi": 200
+}

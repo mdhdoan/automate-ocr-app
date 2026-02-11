@@ -1,0 +1,7 @@
+{
+  "field_list": "PATH file number\nDFO file number\nApprover\nDate of issuance\nLocation\nTotal area of impact size\nType of area of impact\nSummary",
+  "user_prompt": "Extract the requested fields as accurately as possible from the OCR text.",
+  "ocr_model": "mistral-small3.2",
+  "extract_model": "gpt-oss",
+  "dpi": 200
+}

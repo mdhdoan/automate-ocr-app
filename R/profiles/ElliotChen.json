@@ -1,0 +1,7 @@
+{
+  "field_list": "Field 1\nField 2\nField 3",
+  "user_prompt": "Extract the requested fields as accurately as possible from the OCR text.",
+  "ocr_model": "mistral-small3.2",
+  "extract_model": "gpt-oss",
+  "dpi": 100
+}

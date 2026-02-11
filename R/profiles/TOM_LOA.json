@@ -1,0 +1,7 @@
+{
+  "field_list": "was the activity approved or not\nlist of activities proposed\nlist of potential impacts to fish or fish habitat\nlist of mitigation measures\ntimeline for implementation of mitigation measures , if mentioned\nname of biologist writing the letter\nname of proponent",
+  "user_prompt": "the extracted document is a letter of authorization.  it outlines the results of a review of an application by a proponent who wishes to undertake some sort of activity in or near water which may result in harm to fish or fish habitat.  the reviewer has considered the proposed activity and identified potential harms, the size of the potential harms and any mitigation measures  the proponent will be required to undertake. \n\nThe letter consists of standardized sections including  a subject, description of proposed activities,  information considered in the review,  results of the review determination, identification of mitigation measures and additional standqaredized legal text. \n\nExtract the above information from the document.  if there are multiple answers to a query, separate those answers by a semicolon. provide units where there are measurements or numbers",
+  "ocr_model": "mistral-small3.2",
+  "extract_model": "gpt-oss",
+  "dpi": 200
+}

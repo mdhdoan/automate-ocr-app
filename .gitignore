@@ -1,0 +1,10 @@
+LICENSE
+images/
+json/
+output_results/
+txt/
+R/**/*.png
+R/*.png
+R/ocr_images/
+pdf/
+data/
