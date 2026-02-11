@@ -1,8 +1,8 @@
-# batch_ollama_image_ocr_merge.py
+# ocr.py
 # Usage:
-#   python batch_ollama_image_ocr_merge.py gemma3 data/test_images
-#   python batch_ollama_image_ocr_merge.py gemma3 data/test_images --recursive
-#   python batch_ollama_image_ocr_merge.py gemma3 data/test_images --prompt "Extract all readable text. Return plain text only."
+#   python ocr.py gemma3 data/test_images
+#   python ocr.py gemma3 data/test_images --recursive
+#   python ocr.py gemma3 data/test_images --prompt "Extract all readable text. Return plain text only."
 
 import sys
 import re
@@ -66,7 +66,7 @@ def doc_key_and_page(stem: str) -> tuple[str, int]:
 
 def main():
     if len(sys.argv) < 3:
-        print("Usage: python batch_ollama_image_ocr_merge.py <model> <images_folder> [--recursive] [--prompt <text>]")
+        print("Usage: python ocr.py <model> <images_folder> [--recursive] [--prompt <text>]")
         sys.exit(1)
 
     model = sys.argv[1]
