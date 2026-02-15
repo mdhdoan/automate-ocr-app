@@ -41,7 +41,7 @@ except Exception:
 
 
 # ---------------- Paths ----------------
-DATA_ROOT = Path("/home/doanm/ocr-automate/data")
+DATA_ROOT = Path("./data")
 PROJECTS_ROOT = DATA_ROOT / "streamlit_projects"
 
 
