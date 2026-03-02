@@ -34,10 +34,35 @@ except Exception:
 
 # --- User-provided PDF->images module ---
 # Expecting: convert_to_img.py with convert_pdf2img(...)
+
+import sys
+from pathlib import Path
+
+THIS_DIR = Path(__file__).resolve().parent          # .../python
+REPO_ROOT = THIS_DIR.parent                         # .../automate-ocr-app
+
+for p in (str(REPO_ROOT), str(THIS_DIR)):
+    if p not in sys.path:
+        sys.path.insert(0, p)
 try:
     from convert_to_img import convert_pdf2img  # type: ignore
-except Exception:
+
+except ModuleNotFoundError as e:
     convert_pdf2img = None  # type: ignore
+    st.error(f"Module not found: {e}")
+    st.write("CWD:", os.getcwd())
+    st.write("__file__ dir:", str(Path(__file__).resolve().parent))
+    st.write("sys.path (top):", sys.path[:5])
+
+except Exception as e:
+    # This is the big one: shows the real reason (missing pymupdf, etc.)
+    st.exception(e)
+    convert_pdf2img = None
+    raise
+# try:
+#     from convert_to_img import convert_pdf2img  # type: ignore
+# except Exception:
+#     convert_pdf2img = None  # type: ignore
 
 
 # ---------------- Paths ----------------
@@ -387,7 +412,7 @@ def extract_pdf_text_pymupdf(pdf_path: Path) -> str | None:
     Returns None if PyMuPDF isn't available or PDF yields no useful text.
     """
     try:
-        import fitz  # type: ignore
+        import pymupdf  # type: ignore
     except Exception:
         return None
 
@@ -395,7 +420,7 @@ def extract_pdf_text_pymupdf(pdf_path: Path) -> str | None:
         return None
 
     try:
-        doc = fitz.open(str(pdf_path))
+        doc = pymupdf.open(str(pdf_path))
         try:
             pieces: list[str] = []
             for i in range(doc.page_count):
