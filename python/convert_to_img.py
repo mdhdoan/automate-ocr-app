@@ -2,8 +2,7 @@ import os
 import re
 from pathlib import Path
 from typing import Optional, Sequence
-import fitz  # PyMuPDF
-
+import pymupdf
 
 def sanitize_stem(stem: str) -> str:
     stem = (stem or "").strip()
@@ -34,7 +33,7 @@ def convert_pdf2img(
 ) -> list[str]:
     os.makedirs(out_dir, exist_ok=True)
 
-    pdf = fitz.open(input_file)
+    pdf = PyMuPDF.open(input_file)
     output_files: list[str] = []
     try:
         total_pages = pdf.page_count
@@ -47,7 +46,7 @@ def convert_pdf2img(
                 continue
 
             page = pdf[pg]
-            mat = fitz.Matrix(zoom, zoom).prerotate(rotate)
+            mat = PyMuPDF.Matrix(zoom, zoom).prerotate(rotate)
             pix = page.get_pixmap(matrix=mat, alpha=False)  # type: ignore
 
             page_str = str(pg + 1).zfill(width)
