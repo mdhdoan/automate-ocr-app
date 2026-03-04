@@ -19,6 +19,8 @@ library(pdftools)
 ## If Ollama is not on localhost:11434, point to your URL:
 # set_default_url("http://localhost:11434")
 
+options(shiny.maxRequestSize = 50 * 1024^2)  # 50 MB
+
 # ---- Profiles config -----------------------------------------------
 
 profiles_dir <- "profiles"
@@ -66,6 +68,33 @@ delete_profile_from_disk <- function(name) {
   file.remove(path)
 }
 
+# ---- Example docs --------------------------------------------------
+
+example_dir <- "example_docs"
+if (!dir.exists(example_dir)) dir.create(example_dir, recursive = TRUE)
+
+# Put your sample PDF(s) in ./example_docs/
+# Example: ./example_docs/BC16-056220_Area_3_Ansedagan_Creek_2004_Format_6C.pdf
+example_docs <- list.files(
+  example_dir,
+  pattern = "\\.(pdf|png|jpg|jpeg)$",
+  full.names = TRUE,
+  ignore.case = TRUE
+)
+
+# Named choices for UI
+example_choices <- setNames(example_docs, basename(example_docs))
+
+# Example OCR text files for extraction (put .txt files in ./example_docs/)
+example_txts <- list.files(
+  example_dir,
+  pattern = "\\.(txt|text|log)$",
+  full.names = TRUE,
+  ignore.case = TRUE
+)
+example_txt_choices <- setNames(example_txts, basename(example_txts))
+
+
 # ---- OCR helpers ---------------------------------------------------
 
 pdf_to_png_pages <- function(pdf_path, dpi = 200L) {
@@ -91,7 +120,8 @@ ocr_page_image_ollama <- function(
   image_path,
   model  = "mistral-small3.2",
   prompt = "Transcribe all text in this image as plain UTF-8 text, preserving reading order.",
-  temperature = 0
+  temperature = 0, 
+  keep_alive
 ) {
   if (!file.exists(image_path)) {
     stop("Image file not found: ", image_path)
@@ -103,7 +133,8 @@ ocr_page_image_ollama <- function(
     images      = image_path,  # local path, ollamar sends it to Ollama
     stream      = FALSE,
     output      = "text",
-    temperature = temperature
+    temperature = temperature,
+    keep_alive = '5m'
   )
 }
 
@@ -185,16 +216,16 @@ extract_json_substring <- function(x) {
 
 light_theme <- bs_theme(
   version   = 5,
-  bootswatch = "flatly"
+  bootswatch = "lumen"
 )
 
 dark_theme <- bs_theme(
   version   = 5,
-  bootswatch = "darkly"
+  bootswatch = "cyborg"
 )
 
 ui <- fluidPage(
-  theme = light_theme,
+  theme = dark_theme,
   tags$head(
     tags$style(HTML("
       .ocr-spinner-container {
@@ -307,12 +338,35 @@ ui <- fluidPage(
         value = FALSE
       ),     
       tags$hr(),
-      h4("1. Upload document"),
-      fileInput(
-        "file",
-        "PDF / PNG / JPEG",
-        accept = c(".pdf", ".png", ".jpg", ".jpeg")
+      h4("1. Choose document"),
+      radioButtons(
+        "doc_source",
+        label = NULL,
+        choices = c("Example" = "example", "Upload" = "upload"),
+        selected = "upload",
+        inline = TRUE
       ),
+
+      conditionalPanel(
+        condition = "input.doc_source == 'upload'",
+        fileInput(
+          "file",
+          "PDF / PNG / JPEG",
+          accept = c(".pdf", ".png", ".jpg", ".jpeg")
+        )
+      ),
+
+      conditionalPanel(
+        condition = "input.doc_source == 'example'",
+        selectInput(
+          "example_doc",
+          "Example document",
+          choices  = example_choices,
+          selected = if (length(example_choices)) unname(example_choices[1]) else NULL
+        ),
+        actionButton("use_example", "Use this example", class = "btn-secondary")
+      ),
+      uiOutput("selected_doc_info"),
       sliderInput(
         "dpi",
         "PDF render DPI (for OCR) - higher = better quality, but slower",
@@ -321,31 +375,36 @@ ui <- fluidPage(
         value = 100,
         step = 50
       ),
-      numericInput(
-        "page_start",
-        "First page to OCR (blank = 1)",
-        value = NA,
-        min = 1,
-        step = 1
-      ),
-      numericInput(
-        "page_end",
-        "Last page to OCR (blank = all pages) - limit pages for speed",
-        value = NA,
-        min = 1,
-        step = 1
-      ),     
+      numericInput("page_start", "First page to OCR (blank = 1)", value = NA, min = 1, step = 1),
+      numericInput("page_end",   "Last page to OCR (blank = all pages) - limit pages for speed", value = NA, min = 1, step = 1),
       textInput(
         "ocr_model",
         "OCR model (default: mistral-small3.2, run on-prem with Ollama)",
         value = "mistral-small3.2"
       ),
+
       actionButton("run_ocr", "Run OCR", class = "btn-primary"),
       uiOutput("ocr_spinner"),
+      h5("1.1 Optional: Export OCR text"),
+      downloadButton("download_ocr_text", "Download OCR text (.txt)"),    
       br(),
       tags$hr(),
-      
+
       h4("2. Field extraction (default to gpt-oss)"),
+      fileInput(
+        "extract_text_file",
+        "Optional: upload OCR text (.txt) to use for extraction",
+        accept = c(".txt", ".text", ".log")
+      ),
+      selectInput(
+        "example_extract_text",
+        "Or pick example OCR text (from example_docs)",
+        choices  = example_txt_choices,
+        selected = if (length(example_txt_choices)) unname(example_txt_choices[1]) else NULL
+      ),
+      actionButton("use_example_extract_text", "Use this example text", class = "btn-secondary"),
+      br(),
+      tags$hr(),
       textAreaInput(
         "field_list",
         "Fields to extract (one per line)",
@@ -363,11 +422,7 @@ ui <- fluidPage(
         "Extraction model (default: GPT-OSS, run on-prem with Ollama)",
         value = "gpt-oss"
       ),
-      fileInput(
-        "extract_text_file",
-        "Optional: upload OCR text (.txt) to use for extraction",
-        accept = c(".txt", ".text", ".log")
-      ),
+    
       actionButton("run_extract", "Run Field Extraction", class = "btn-success"),      
       tags$hr(),
 
@@ -391,10 +446,9 @@ ui <- fluidPage(
       actionButton("load_profile", "Load Profile"),
       tags$hr(),
 
-      h4("3. Export"),
+      h4("3. Export Extracted date"),
       downloadButton("download_csv", "Download as CSV"),
-      downloadButton("download_json", "Download as JSON"),
-      downloadButton("download_ocr_text", "Download OCR text (.txt)"),      
+      downloadButton("download_json", "Download as JSON"), 
       tags$hr(),
       br(),
       h4("Bulk processing"),
@@ -603,6 +657,66 @@ server <- function(input, output, session) {
   bulk_extract_results <- reactiveVal(list()) # name -> list(df = data.frame(...), raw = model_text)
   bulk_edited_page_texts <- reactiveVal(list())  # list[file_name] -> character vector per page
 
+  example_extract_text <- reactiveVal(NULL)
+
+  observeEvent(input$use_example_extract_text, {
+    p <- input$example_extract_text
+    if (is.null(p) || !nzchar(p) || !file.exists(p)) {
+      showNotification("Example OCR text file not found.", type = "error")
+      return(NULL)
+    }
+
+    txt <- paste(readLines(p, warn = FALSE, encoding = "UTF-8"), collapse = "\n")
+    example_extract_text(txt)
+
+    showNotification(paste("Using example OCR text:", basename(p)), type = "message")
+  })
+
+  # Tracks whichever document is "selected" (upload or example)
+  current_doc <- reactiveVal(list(path = NULL, name = NULL, source = NULL))
+
+  # When user uploads a file, set it as current doc
+  observeEvent(input$file, {
+    if (!is.null(input$file) && nrow(input$file) > 0) {
+      current_doc(list(
+        path = input$file$datapath,
+        name = input$file$name,
+        source = "upload"
+      ))
+    }
+  }, ignoreInit = TRUE)
+
+  # When user clicks "Use this example", set selected example as current doc
+  observeEvent(input$use_example, {
+    ex_path <- input$example_doc
+    if (is.null(ex_path) || !nzchar(ex_path)) {
+      showNotification("No example selected.", type = "warning")
+      return(NULL)
+    }
+    if (!file.exists(ex_path)) {
+      showNotification(paste("Example file not found:", ex_path), type = "error", duration = NULL)
+      return(NULL)
+    }
+
+    current_doc(list(
+      path = ex_path,
+      name = basename(ex_path),
+      source = "example"
+    ))
+
+    # Optional: jump to single-file tab so they immediately see preview
+    updateTabsetPanel(session, "mode_tabs", selected = "Single File")
+
+    showNotification(paste("Selected example:", basename(ex_path)), type = "message")
+  })
+
+  output$selected_doc_info <- renderUI({
+    doc <- current_doc()
+    if (is.null(doc$path)) {
+      return(helpText("No document selected yet. Upload a file or pick an example."))
+    }
+    tags$small(sprintf("Selected: %s (%s)", doc$name, doc$source))
+  })
 
   run_extraction_on_text <- function(ocr_text_full) {
     fields <- strsplit(input$field_list, "\\r?\\n")[[1]]
@@ -1299,7 +1413,7 @@ observeEvent(input$run_bulk_extract, {
       tags$div(
         class = "spinner-border text-secondary",
         role  = "status",
-        tags$span(class = "visually-hidden", "Running OCR...")
+        tags$span(class = "visually-hidden", "Running OCR...\n")
       )
     )
   })
@@ -1469,23 +1583,26 @@ observeEvent(input$run_bulk_extract, {
 
 
   observeEvent(input$run_ocr, {
-    req(input$file)
+    doc <- current_doc()
+    if (is.null(doc$path) || !file.exists(doc$path)) {
+      showNotification("No document selected (or file missing). Upload a file or choose an example.", type = "warning")
+      return(NULL)
+    }
 
     # reset prior results
     ocr_result(NULL)
     extract_df(NULL)
     extract_json(NULL)
-    edited_page_texts(NULL)  # NEW
+    edited_page_texts(NULL)
 
-
-    file_path <- input$file$datapath
+    file_path <- doc$path
     dpi       <- input$dpi
     model     <- input$ocr_model
 
     ocr_running(TRUE)  # <<< START SPINNER
 
     withProgress(
-      message = "Running OCR with Ollama...",
+      message = "Running OCR with Ollama...\n",
       value = 0,
       {
         # ensure we always turn it off at the end, even on error
@@ -1569,10 +1686,22 @@ observeEvent(input$run_bulk_extract, {
       )
     }
 
+    sample_text <- example_extract_text()
+
+    # Pick the best available text source
+    chosen_text <- NULL
+    if (!is.null(uploaded_text) && nzchar(uploaded_text)) {
+      chosen_text <- uploaded_text
+    } else if (!is.null(sample_text) && nzchar(sample_text)) {
+      chosen_text <- sample_text
+    } else {
+      chosen_text <- NULL
+    }
+
     res <- ocr_result()
 
-    # If no uploaded text, we still require OCR result
-    if (is.null(uploaded_text) || !nzchar(uploaded_text)) {
+    # If no chosen_text, require OCR result as fallback
+    if (is.null(chosen_text) || !nzchar(chosen_text)) {
       req(res)
     }
 
@@ -1616,9 +1745,9 @@ observeEvent(input$run_bulk_extract, {
             )
 
             # ---- Decide which OCR text to use ----
-            if (!is.null(uploaded_text) && nzchar(uploaded_text)) {
+            if (!is.null(chosen_text) && nzchar(chosen_text)) {
               # Use user-uploaded OCR text directly
-              ocr_text <- uploaded_text
+              ocr_text <- chosen_text
             } else {
               # Build combined text from per-page edits if present
               edt <- edited_page_texts()
@@ -1900,7 +2029,8 @@ observeEvent(input$run_bulk_extract, {
   # Download CSV
   output$download_csv <- downloadHandler(
     filename = function() {
-      base <- if (!is.null(input$file$name)) tools::file_path_sans_ext(input$file$name) else "ocr_extraction"
+      doc <- current_doc()
+      base <- if (!is.null(doc$name) && nzchar(doc$name)) tools::file_path_sans_ext(doc$name) else "ocr_extraction"
       paste0(base, "_fields.csv")
     },
     content = function(file) {
@@ -1916,7 +2046,8 @@ observeEvent(input$run_bulk_extract, {
   # Download JSON (field name as key, with value + confidence)
   output$download_json <- downloadHandler(
     filename = function() {
-      base <- if (!is.null(input$file$name)) tools::file_path_sans_ext(input$file$name) else "ocr_extraction"
+      doc <- current_doc()
+      base <- if (!is.null(doc$name) && nzchar(doc$name)) tools::file_path_sans_ext(doc$name) else "ocr_extraction"
       paste0(base, "_fields.json")
     },
     content = function(file) {
@@ -1939,11 +2070,8 @@ observeEvent(input$run_bulk_extract, {
   # Download OCR text (uses edited per-page text if present)
   output$download_ocr_text <- downloadHandler(
     filename = function() {
-      base <- if (!is.null(input$file$name)) {
-        tools::file_path_sans_ext(input$file$name)
-      } else {
-        "ocr_text"
-      }
+      doc <- current_doc()
+      base <- if (!is.null(doc$name) && nzchar(doc$name)) tools::file_path_sans_ext(doc$name) else "ocr_extraction"
       paste0(base, "_ocr.txt")
     },
     content = function(file) {

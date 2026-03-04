@@ -1,12 +1,12 @@
 # app.R --------------------------------------------------------------
 # Local Shiny app:
-# 1) OCR PDF/PNG/JPEG via Ollama + mistral-small3.2
+# 1) OCR PDF/PNG/JPEG via Ollama + mistral-small3.2 (quality) or deepseek-ocr (speed)
 # 2) Extract fields with confidence via Ollama + gpt-oss
 # 3) User can customize field list + user prompt
 # 4) Save / load / delete profiles (field list, user prompt, models, dpi)
 # 5) Export results as CSV or JSON
 
-# install.packages(c("shiny", "magick", "ollamar", "jsonlite"))  # if needed
+# install.packages(c("shiny", "magick", "ollamar", "jsonlite", "DT"))  # if needed
 
 library(shiny)
 library(bslib)
@@ -14,6 +14,7 @@ library(magick)
 library(ollamar)
 library(jsonlite)
 library(pdftools)
+library(DT)
 
 
 ## If Ollama is not on localhost:11434, point to your URL:
@@ -37,18 +38,11 @@ sanitize_profile_name <- function(x) {
   x
 }
 
-save_profile_to_disk <- function(name, input) {
+save_profile_to_disk <- function(name, profile) {
   prof_name <- sanitize_profile_name(name)
   if (prof_name == "") stop("Profile name is empty after sanitization.")
 
-  profile <- list(
-    field_list    = input$field_list,
-    user_prompt   = input$user_prompt,
-    ocr_model     = input$ocr_model,
-    extract_model = input$extract_model,
-    dpi           = input$dpi
-  )
-
+  # profile is a list: field_list (string or vector), user_prompt, ocr_model, extract_model, dpi
   path <- file.path(profiles_dir, paste0(prof_name, ".json"))
   jsonlite::write_json(profile, path, pretty = TRUE, auto_unbox = TRUE)
   prof_name
@@ -233,15 +227,32 @@ ui <- fluidPage(
         min-height: 32px;
       }
 
-      /* Make sure preview images never overflow their columns */
+      /* Preview images (pan/zoom) */
+      .panzoom-container {
+        position: relative;
+        overflow: hidden;
+        border-radius: 0.5rem;
+        border: 1px solid rgba(255,255,255,0.15);
+        background: rgba(0,0,0,0.25);
+      }
+
       #original_page_image img,
       #bulk_page_image img {
-        max-width: 100%;
+        width: 100%;
         height: auto;
+        max-width: none;
+        transform-origin: 0 0;
+        cursor: grab;
+        user-select: none;
+        touch-action: none;
         display: block;
       }
 
-      /* Scrollable panel for OCR text (single + bulk) */
+      #original_page_image img:active,
+      #bulk_page_image img:active {
+        cursor: grabbing;
+      }
+/* Scrollable panel for OCR text (single + bulk) */
       .ocr-page-text-wrapper {
         max-height: 80vh;
         overflow-y: auto;
@@ -324,10 +335,149 @@ ui <- fluidPage(
           Shiny.setInputValue('system_pref_dark', mq.matches, {priority: 'event'});
         }
       });
-    "))
-  ),
+    ")),
+    tags$script(HTML("
+      (function(){
+        function clamp(v, min, max){ return Math.max(min, Math.min(max, v)); }
 
-  titlePanel("Doc Flow: Local OCR & Details Extraction (with Mistral and GPT-OSS)"),
+        function setupPanZoom(outputId, zoomInId, zoomOutId, resetId){
+          var container = document.getElementById(outputId);
+          if(!container) return;
+
+          var state = { scale: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, pointerId: null };
+
+          function getImg(){ return container.querySelector('img'); }
+
+          function apply(){
+            var img = getImg();
+            if(!img) return;
+            img.style.transform = 'translate(' + state.x + 'px,' + state.y + 'px) scale(' + state.scale + ')';
+          }
+
+          function ensureImg(){
+            var img = getImg();
+            if(!img) return;
+            img.setAttribute('draggable', 'false');
+            img.style.transformOrigin = '0 0';
+            img.style.userSelect = 'none';
+            img.style.touchAction = 'none';
+          }
+
+          function reset(){
+            state.scale = 1;
+            state.x = 0;
+            state.y = 0;
+            apply();
+          }
+
+          function zoomAt(clientX, clientY, zoomFactor){
+            var rect = container.getBoundingClientRect();
+            var px = clientX - rect.left;
+            var py = clientY - rect.top;
+
+            var newScale = clamp(state.scale * zoomFactor, 0.25, 8);
+            var ratio = newScale / state.scale;
+
+            state.x = state.x - (px - state.x) * (ratio - 1);
+            state.y = state.y - (py - state.y) * (ratio - 1);
+            state.scale = newScale;
+            apply();
+          }
+
+          container.addEventListener('wheel', function(e){
+            var img = getImg();
+            if(!img) return;
+            e.preventDefault();
+            var factor = (e.deltaY < 0) ? 1.12 : 0.89;
+            zoomAt(e.clientX, e.clientY, factor);
+          }, { passive: false });
+
+          container.addEventListener('pointerdown', function(e){
+            var img = getImg();
+            if(!img) return;
+            state.dragging = true;
+            state.pointerId = e.pointerId;
+            state.startX = e.clientX - state.x;
+            state.startY = e.clientY - state.y;
+            try { container.setPointerCapture(e.pointerId); } catch(err) {}
+          });
+
+          container.addEventListener('pointermove', function(e){
+            if(!state.dragging || state.pointerId !== e.pointerId) return;
+            state.x = e.clientX - state.startX;
+            state.y = e.clientY - state.startY;
+            apply();
+          });
+
+          container.addEventListener('pointerup', function(e){
+            if(state.pointerId !== e.pointerId) return;
+            state.dragging = false;
+            state.pointerId = null;
+          });
+
+          container.addEventListener('dblclick', function(){ reset(); });
+
+          function hookBtn(id, fn){
+            var el = document.getElementById(id);
+            if(!el) return;
+            el.addEventListener('click', function(evt){
+              evt.preventDefault();
+              fn();
+            });
+          }
+
+          function zoomCenter(factor){
+            var rect = container.getBoundingClientRect();
+            zoomAt(rect.left + rect.width/2, rect.top + rect.height/2, factor);
+          }
+
+          hookBtn(zoomInId,  function(){ zoomCenter(1.2); });
+          hookBtn(zoomOutId, function(){ zoomCenter(0.83); });
+          hookBtn(resetId,   function(){ reset(); });
+
+          // Re-init when Shiny replaces the <img> node
+          var obs = new MutationObserver(function(){
+            ensureImg();
+            reset();
+          });
+          obs.observe(container, { childList: true, subtree: true });
+
+          ensureImg();
+          reset();
+        }
+
+        document.addEventListener('DOMContentLoaded', function(){
+          setupPanZoom('original_page_image', 'pz_orig_zoom_in', 'pz_orig_zoom_out', 'pz_orig_reset');
+          setupPanZoom('bulk_page_image',     'pz_bulk_zoom_in', 'pz_bulk_zoom_out', 'pz_bulk_reset');
+        });
+      })();
+  ")),
+  tags$script(HTML("
+    // Confirm Fields button: push current DT data to server
+    $(document).on('click', '#confirm_field_table', function(){
+      try { if (document.activeElement) document.activeElement.blur(); } catch(e) {}
+      $('#field_table input').blur();
+      setTimeout(function(){
+        try {
+          var tbl = $('#field_table table').DataTable();
+          if (!tbl) return;
+          var data = tbl.rows().data().toArray();
+          Shiny.setInputValue('field_table_confirmed_data', data, {priority: 'event'});
+        } catch(err) {
+          // no-op
+        }
+      }, 60);
+    });
+
+    // When running extraction, blur any active field cell so the last edit is captured
+    $(document).on('click', '#run_extract', function(){
+      try { if (document.activeElement) document.activeElement.blur(); } catch(e) {}
+      $('#field_table input').blur();
+    });
+  "))
+),
+
+titlePanel("Doc Flow - The Current: Local OCR & Field Extraction (Mistral / DeepSeek OCR + GPT-OSS)"),
   
   sidebarLayout(
     sidebarPanel(
@@ -377,11 +527,16 @@ ui <- fluidPage(
       ),
       numericInput("page_start", "First page to OCR (blank = 1)", value = NA, min = 1, step = 1),
       numericInput("page_end",   "Last page to OCR (blank = all pages) - limit pages for speed", value = NA, min = 1, step = 1),
-      textInput(
-        "ocr_model",
-        "OCR model (default: mistral-small3.2, run on-prem with Ollama)",
-        value = "mistral-small3.2"
-      ),
+      selectInput(
+          "ocr_model",
+          "OCR model",
+          choices = c(
+            "Quality — mistral-small3.2" = "mistral-small3.2",
+            "Speed — deepseek-ocr"       = "deepseek-ocr:3b"
+          ),
+          selected = "mistral-small3.2"
+        ),
+        tags$small("Wheel-zoom + drag-pan are available in the preview. OCR models are limited to the two options above."),
 
       actionButton("run_ocr", "Run OCR", class = "btn-primary"),
       uiOutput("ocr_spinner"),
@@ -405,23 +560,28 @@ ui <- fluidPage(
       actionButton("use_example_extract_text", "Use this example text", class = "btn-secondary"),
       br(),
       tags$hr(),
-      textAreaInput(
-        "field_list",
-        "Fields to extract (one per line)",
-        value = "Field 1\nField 2\nField 3",
-        rows = 5
-      ),
+      h5("Fields to extract"),
+        DTOutput("field_table"),
+        div(
+          class = "d-flex gap-2 mt-2",
+          actionButton("add_field_row", "Add row", class = "btn-secondary flex-fill"),
+          actionButton("remove_field_row", "Remove selected", class = "btn-danger flex-fill"),
+          actionButton("confirm_field_table", "Confirm fields", class = "btn-primary flex-fill")
+        ),
+        uiOutput("field_confirm_status"),
+        tags$small("Click a cell to edit. After editing, click 'Confirm fields' (or click outside the cell) so extraction uses the latest list."),
       textAreaInput(
         "user_prompt",
-        "User prompt (additional instructions for extraction model)",
+        "Describe the text outline and file structure, and any specific instructions for extracting the fields. Be as detailed as possible to help the model understand how to find the requested information.",
         value = "Extract the requested fields as accurately as possible from the OCR text.",
         rows = 4
       ),
-      textInput(
-        "extract_model",
-        "Extraction model (default: GPT-OSS, run on-prem with Ollama)",
-        value = "gpt-oss"
-      ),
+      selectInput(
+          "extract_model",
+          "Extraction model",
+          choices = c("gpt-oss" = "gpt-oss"),
+          selected = "gpt-oss"
+        ),
     
       actionButton("run_extract", "Run Field Extraction", class = "btn-success"),      
       tags$hr(),
@@ -446,12 +606,12 @@ ui <- fluidPage(
       actionButton("load_profile", "Load Profile"),
       tags$hr(),
 
-      h4("3. Export Extracted date"),
+      h4("3. Export Extracted Data"),
       downloadButton("download_csv", "Download as CSV"),
       downloadButton("download_json", "Download as JSON"), 
       tags$hr(),
       br(),
-      h4("Bulk processing"),
+      h4("4. Bulk process multiple documents"),
       fileInput(
         "bulk_files",
         "Bulk documents (PDF / PNG / JPEG)",
@@ -473,8 +633,8 @@ ui <- fluidPage(
         )
       ),
       br(), br(),
-      downloadButton("download_bulk_csv",  "Download bulk CSV"),
-      downloadButton("download_bulk_json", "Download bulk JSON")
+      downloadButton("download_bulk_csv",  "Download bulk result in CSV"),
+      downloadButton("download_bulk_json", "Download bulk result in JSON")
     ),
 
     mainPanel(
@@ -489,7 +649,17 @@ ui <- fluidPage(
           fluidRow(
             column(
               width = 6,
-              imageOutput("original_page_image", height = "auto")
+              div(
+                class = "panzoom-toolbar d-flex flex-wrap gap-2 mb-2",
+                tags$button(id = "pz_orig_zoom_in",  type = "button", class = "btn btn-sm btn-outline-light", "+"),
+                tags$button(id = "pz_orig_zoom_out", type = "button", class = "btn btn-sm btn-outline-light", "-"),
+                tags$button(id = "pz_orig_reset",    type = "button", class = "btn btn-sm btn-outline-light", "Reset"),
+                tags$span(class = "small text-muted ms-1", "Scroll to zoom • drag to pan • double-click to reset")
+              ),
+              div(
+                class = "panzoom-container",
+                imageOutput("original_page_image", height = "80vh")
+              )
             ),
             column(
               width = 6,
@@ -531,7 +701,7 @@ ui <- fluidPage(
           tabsetPanel(
             id = "tabs",
             tabPanel("OCR Text - After Step 1", verbatimTextOutput("ocr_output", placeholder = TRUE)),
-            tabPanel("Extracted Fields - After Step 2", tableOutput("extract_table")),
+	            tabPanel("Extracted Fields - After Step 2", DTOutput("extract_dt")),
             tabPanel("Raw JSON (debug) - After Step 2", verbatimTextOutput("raw_json_output", placeholder = TRUE))
           )
         ),
@@ -557,7 +727,17 @@ ui <- fluidPage(
           fluidRow(
             column(
               width = 6,
-              imageOutput("bulk_page_image", height = "auto")
+              div(
+                class = "panzoom-toolbar d-flex flex-wrap gap-2 mb-2",
+                tags$button(id = "pz_bulk_zoom_in",  type = "button", class = "btn btn-sm btn-outline-light", "+"),
+                tags$button(id = "pz_bulk_zoom_out", type = "button", class = "btn btn-sm btn-outline-light", "-"),
+                tags$button(id = "pz_bulk_reset",    type = "button", class = "btn btn-sm btn-outline-light", "Reset"),
+                tags$span(class = "small text-muted ms-1", "Scroll to zoom • drag to pan • double-click to reset")
+              ),
+              div(
+                class = "panzoom-container",
+                imageOutput("bulk_page_image", height = "80vh")
+              )
             ),
             column(
               width = 6,
@@ -659,6 +839,112 @@ server <- function(input, output, session) {
 
   example_extract_text <- reactiveVal(NULL)
 
+  # Editable field list (table) - draft + confirmed
+  initial_fields_df <- data.frame(
+    Field = c("Field 1", "Field 2", "Field 3"),
+    stringsAsFactors = FALSE
+  )
+
+  fields_tbl <- reactiveVal(initial_fields_df)            # what you see/edit
+  fields_tbl_confirmed <- reactiveVal(initial_fields_df)  # what extraction uses
+  fields_confirmed_at <- reactiveVal(Sys.time())
+  fields_dirty <- reactiveVal(FALSE)
+
+  output$field_table <- DT::renderDT({
+    DT::datatable(
+      fields_tbl(),
+      rownames  = FALSE,
+      selection = "single",
+      editable  = list(target = "cell"),
+      options   = list(
+        dom       = "t",
+        paging    = FALSE,
+        ordering  = FALSE,
+        autoWidth = TRUE
+      )
+    )
+  })
+
+  observeEvent(input$field_table_cell_edit, {
+    info <- input$field_table_cell_edit
+    df <- fields_tbl()
+
+    r <- suppressWarnings(as.integer(info$row))
+    c <- suppressWarnings(as.integer(info$col))
+
+    # Guard against unexpected edit payloads
+    if (is.na(r) || is.na(c)) return()
+    if (r < 1 || r > nrow(df)) return()
+    if (c < 1 || c > ncol(df)) return()
+
+    # Preserve column type (character, numeric, etc.)
+    df[r, c] <- DT::coerceValue(info$value, df[r, c])
+    fields_tbl(df)
+    fields_dirty(TRUE)
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$add_field_row, {
+    df <- fields_tbl()
+    df <- rbind(df, data.frame(Field = "", stringsAsFactors = FALSE))
+    fields_tbl(df)
+    fields_dirty(TRUE)
+  })
+
+  observeEvent(input$remove_field_row, {
+    sel <- input$field_table_rows_selected
+    if (is.null(sel) || length(sel) == 0) return()
+    df <- fields_tbl()
+    df <- df[-sel, , drop = FALSE]
+    if (nrow(df) == 0) {
+      df <- data.frame(Field = "", stringsAsFactors = FALSE)
+    }
+    fields_tbl(df)
+    fields_dirty(TRUE)
+  })
+
+# Confirm button pushes the full DT data from the browser, so the last in-cell edit is included.
+observeEvent(input$field_table_confirmed_data, {
+  rows <- input$field_table_confirmed_data
+
+  # rows is a list of row-vectors coming from the browser DT
+  if (is.null(rows) || length(rows) == 0) {
+    df <- data.frame(Field = "", stringsAsFactors = FALSE)
+  } else {
+    vals <- vapply(rows, function(r) {
+      r <- unlist(r, use.names = FALSE)
+      if (length(r) >= 1) as.character(r[[1]]) else ""
+    }, character(1))
+
+    df <- data.frame(Field = vals, stringsAsFactors = FALSE)
+  }
+
+  # Keep a minimum of 1 row
+  if (nrow(df) == 0) df <- data.frame(Field = "", stringsAsFactors = FALSE)
+
+  fields_tbl(df)                 # sync what you see
+  fields_tbl_confirmed(df)       # what extraction uses
+  fields_confirmed_at(Sys.time())
+  fields_dirty(FALSE)
+
+  showNotification("Fields confirmed.", type = "message")
+}, ignoreInit = TRUE)
+
+output$field_confirm_status <- renderUI({
+  if (isTRUE(fields_dirty())) {
+    return(tags$small(style = "opacity: 0.85;", "Unconfirmed changes — click 'Confirm fields' to apply them."))
+  }
+
+  t <- fields_confirmed_at()
+  if (is.null(t)) {
+    return(tags$small(style = "opacity: 0.85;", "Not confirmed yet."))
+  }
+
+  tags$small(style = "opacity: 0.85;",
+             sprintf("Last confirmed: %s", format(t, "%Y-%m-%d %H:%M:%S")))
+})
+
+
+
   observeEvent(input$use_example_extract_text, {
     p <- input$example_extract_text
     if (is.null(p) || !nzchar(p) || !file.exists(p)) {
@@ -718,10 +1004,34 @@ server <- function(input, output, session) {
     tags$small(sprintf("Selected: %s (%s)", doc$name, doc$source))
   })
 
-  run_extraction_on_text <- function(ocr_text_full) {
-    fields <- strsplit(input$field_list, "\\r?\\n")[[1]]
-    fields <- trimws(fields)
+  get_fields_vector <- function() {
+    df <- fields_tbl_confirmed()
+    if (is.null(df) || !"Field" %in% names(df)) return(character(0))
+    fields <- trimws(df$Field)
     fields <- fields[nzchar(fields)]
+    fields
+  }
+
+  infer_source_from_text <- function(value, full_text) {
+    if (is.null(value) || !nzchar(trimws(value)) || is.null(full_text) || !nzchar(full_text)) return("")
+    val <- trimws(value)
+    if (nchar(val) < 3) return("")
+
+    pos <- regexpr(val, full_text, ignore.case = TRUE, fixed = TRUE)
+    if (is.na(pos) || pos[1] == -1) return("")
+
+    before <- substr(full_text, 1, pos[1])
+    m <- gregexpr("---- PAGE [0-9]+ ----", before)
+    hits <- regmatches(before, m)[[1]]
+    if (length(hits) == 0) return("")
+
+    last <- hits[length(hits)]
+    page_num <- sub("---- PAGE ([0-9]+) ----", "\\1", last)
+    paste0("PAGE ", page_num, " (auto)")
+  }
+
+  run_extraction_on_text <- function(ocr_text_full) {
+    fields <- get_fields_vector()
 
     if (length(fields) == 0) {
       stop("Please provide at least one field name.")
@@ -733,13 +1043,16 @@ server <- function(input, output, session) {
     system_msg <- paste0(
       "You are an information extraction model. ",
       "The user will provide OCR text from a document and a list of target fields. ",
-      "Your job is to fill in those fields based on the OCR text and provide a confidence score in [0,1]. ",
-      "If a field is missing or not inferable, set value to an empty string and confidence to 0.\n\n",
+      "Your job is to fill in those fields based on the OCR text. ",
+      "For each field, provide: value, confidence in [0,1], and a source string that cites where the value came from. ",
+      "The OCR text includes page separators like '---- PAGE N ----'. ",
+      "Use those page numbers in the source, and include a short supporting quote (<=200 chars) when possible. ",
+      "If a field is missing or not inferable, set value to an empty string, confidence to 0, and source to an empty string.\n\n",
       "Return ONLY valid JSON with this exact structure:\n",
       "{\n",
       "  \"fields\": [\n",
-      "    { \"name\": \"FieldName1\", \"value\": \"string\", \"confidence\": 0.0 },\n",
-      "    { \"name\": \"FieldName2\", \"value\": \"string\", \"confidence\": 0.0 }\n",
+      "    { \"name\": \"FieldName1\", \"value\": \"string\", \"confidence\": 0.0, \"source\": \"PAGE 3: ...\" },\n",
+      "    { \"name\": \"FieldName2\", \"value\": \"string\", \"confidence\": 0.0, \"source\": \"\" }\n",
       "  ]\n",
       "}\n",
       "No markdown, no explanation, no extra text."
@@ -811,6 +1124,28 @@ server <- function(input, output, session) {
     if (!"name" %in% names(df)) df$name <- NA_character_
     if (!"value" %in% names(df)) df$value <- NA_character_
     if (!"confidence" %in% names(df)) df$confidence <- NA_real_
+    if (!"source" %in% names(df)) df$source <- ""
+
+    df$name[is.na(df$name)] <- ""
+    df$value[is.na(df$value)] <- ""
+    df$source[is.na(df$source)] <- ""
+
+    df$confidence <- suppressWarnings(as.numeric(df$confidence))
+    df$confidence[is.na(df$confidence)] <- 0
+    df$confidence[df$confidence < 0] <- 0
+    df$confidence[df$confidence > 1] <- 1
+
+    # If the model didn't provide a source, try to infer a page number automatically
+    missing_src <- !nzchar(df$source) & nzchar(df$value)
+    if (any(missing_src)) {
+      df$source[missing_src] <- vapply(
+        df$value[missing_src],
+        function(v) infer_source_from_text(v, ocr_text_full),
+        character(1)
+      )
+    }
+
+    df <- df[, c("name", "value", "confidence", "source"), drop = FALSE]
 
     list(df = df, raw = resp_text)
   }
@@ -1677,6 +2012,10 @@ observeEvent(input$run_bulk_extract, {
   # ---- Field extraction step --------------------------------------
 
   observeEvent(input$run_extract, {
+    if (isTRUE(fields_dirty())) {
+      showNotification("You have unconfirmed field edits. Click 'Confirm fields' first.", type = "warning")
+      return(NULL)
+    }
     # Optional uploaded OCR text (bypasses need for run_ocr)
     uploaded_text <- NULL
     if (!is.null(input$extract_text_file) && nrow(input$extract_text_file) > 0) {
@@ -1705,162 +2044,57 @@ observeEvent(input$run_bulk_extract, {
       req(res)
     }
 
-    # Fields
-    fields <- strsplit(input$field_list, "\\r?\\n")[[1]]
-    fields <- trimws(fields)
-    fields <- fields[nzchar(fields)]  # drop empty
-
+    fields <- get_fields_vector()
     if (length(fields) == 0) {
       showNotification("Please provide at least one field name.", type = "warning")
       return(NULL)
     }
 
-    user_prompt <- input$user_prompt
-    fields_str  <- paste0("- ", fields, collapse = "\n")
-
     withProgress(
       message = "Running field extraction with gpt-oss...",
       value = 0,
       {
-        incProgress(0.2, detail = "Calling Ollama…")
+        incProgress(0.2, detail = "Preparing OCR text...")
 
-        df <- NULL
-        resp_text <- NULL
+        # ---- Decide which OCR text to use ----
+        ocr_text <- NULL
+        if (!is.null(chosen_text) && nzchar(chosen_text)) {
+          # Use user-uploaded OCR text directly
+          ocr_text <- chosen_text
+        } else {
+          # Build combined text from per-page edits if present
+          edt <- edited_page_texts()
+          page_nums <- if (!is.null(res$page_numbers)) {
+            res$page_numbers
+          } else if (!is.null(res$text_per_page)) {
+            seq_along(res$text_per_page)
+          } else {
+            NULL
+          }
 
-        df <- tryCatch(
+          # Optional spellcheck on per-page text
+          if (!is.null(edt) && isTRUE(input$auto_spellcheck)) {
+            edt_checked <- spellcheck_pages(edt)
+          } else {
+            edt_checked <- edt
+          }
+
+          if (!is.null(edt_checked) && !is.null(page_nums) &&
+              length(edt_checked) == length(page_nums)) {
+            ocr_text <- paste(
+              sprintf("---- PAGE %d ----\n%s", page_nums, edt_checked),
+              collapse = "\n\n"
+            )
+          } else {
+            ocr_text <- res$combined_text
+          }
+        }
+
+        incProgress(0.6, detail = "Calling Ollama...")
+
+        ext_res <- tryCatch(
           {
-            system_msg <- paste0(
-              "You are an information extraction model. ",
-              "The user will provide OCR text from a document and a list of target fields. ",
-              "Your job is to fill in those fields based on the OCR text and provide a confidence score in [0,1]. ",
-              "If a field is missing or not inferable, set value to an empty string and confidence to 0.\n\n",
-              "Return ONLY valid JSON with this exact structure:\n",
-              "{\n",
-              "  \"fields\": [\n",
-              "    { \"name\": \"FieldName1\", \"value\": \"string\", \"confidence\": 0.0 },\n",
-              "    { \"name\": \"FieldName2\", \"value\": \"string\", \"confidence\": 0.0 }\n",
-              "  ]\n",
-              "}\n",
-              "No markdown, no explanation, no extra text."
-            )
-
-            # ---- Decide which OCR text to use ----
-            if (!is.null(chosen_text) && nzchar(chosen_text)) {
-              # Use user-uploaded OCR text directly
-              ocr_text <- chosen_text
-            } else {
-              # Build combined text from per-page edits if present
-              edt <- edited_page_texts()
-              page_nums <- if (!is.null(res$page_numbers)) {
-                res$page_numbers
-              } else if (!is.null(res$text_per_page)) {
-                seq_along(res$text_per_page)
-              } else {
-                NULL
-              }
-
-              # Optional spellcheck on per-page text
-              if (!is.null(edt) && isTRUE(input$auto_spellcheck)) {
-                edt_checked <- spellcheck_pages(edt)
-              } else {
-                edt_checked <- edt
-              }
-
-              if (!is.null(edt_checked) && !is.null(page_nums) &&
-                  length(edt_checked) == length(page_nums)) {
-                base_text <- paste(
-                  sprintf("---- PAGE %d ----\n%s", page_nums, edt_checked),
-                  collapse = "\n\n"
-                )
-              } else {
-                base_text <- res$combined_text
-              }
-
-              ocr_text <- base_text
-            }
-
-            # Optional truncation (protects the model)
-            max_chars <- 32000L
-            if (!is.null(ocr_text) && nchar(ocr_text) > max_chars) {
-              cat("[DEBUG] OCR text truncated from", nchar(ocr_text),
-                  "to", max_chars, "characters; using edited/combined OCR.\n")
-              ocr_text <- substr(ocr_text, 1, max_chars)
-            }
-
-            user_msg <- paste0(
-              "USER INSTRUCTIONS:\n",
-              user_prompt, "\n\n",
-              "FIELDS TO EXTRACT:\n",
-              fields_str, "\n\n",
-              "OCR TEXT (possibly truncated):\n",
-              ocr_text
-            )
-
-            cat("=== SYSTEM MESSAGE ===\n")
-            cat(system_msg, "\n\n")
-
-            cat("=== USER MESSAGE ===\n")
-            cat(substr(user_msg, 1, 1000), "\n\n")
-
-            model <- trimws(input$extract_model)
-
-            if (identical(model, "gpt-oss")) {
-              # completion-style prompt
-              full_prompt <- paste(
-                system_msg,
-                "\n\n---\n\n",
-                user_msg,
-                sep = ""
-              )
-
-              resp_text <- generate(
-                model       = model,
-                prompt      = full_prompt,
-                stream      = FALSE,
-                output      = "text",
-                temperature = 0
-              )
-            } else {
-              # chat-style prompt
-              resp_text <- chat(
-                model    = model,
-                messages = list(
-                  list(role = "system", content = system_msg),
-                  list(role = "user",   content = user_msg)
-                ),
-                stream      = FALSE,
-                output      = "text",
-                temperature = 0
-              )
-            }
-
-            if (is.null(resp_text) || !nzchar(resp_text)) {
-              cat("[DEBUG] Extraction model returned empty or NULL response.\n")
-              showNotification(
-                "Extraction model returned an empty response. Try again or change the extraction model.",
-                type = "error",
-                duration = NULL
-              )
-              return(NULL)
-            }
-
-            cat("[DEBUG] First 200 chars of extraction response:\n",
-                substr(resp_text, 1, 200), "\n")
-
-            json_str <- extract_json_substring(resp_text)
-            parsed   <- jsonlite::fromJSON(json_str, simplifyVector = TRUE)
-
-            if (is.null(parsed$fields)) {
-              stop("Response JSON does not contain 'fields' key.")
-            }
-
-            df <- as.data.frame(parsed$fields, stringsAsFactors = FALSE)
-            names(df) <- tolower(names(df))
-            if (!"name" %in% names(df)) stop("Parsed fields must include 'name'.")
-            if (!"value" %in% names(df)) df$value <- NA_character_
-            if (!"confidence" %in% names(df)) df$confidence <- NA_real_
-
-            df
+            run_extraction_on_text(ocr_text)
           },
           error = function(e) {
             showNotification(
@@ -1871,13 +2105,16 @@ observeEvent(input$run_bulk_extract, {
           }
         )
 
-        if (!is.null(df) && !is.null(resp_text)) {
-          extract_df(df)
-          extract_json(resp_text)
+        incProgress(0.2, detail = "Done")
+
+        if (!is.null(ext_res) && !is.null(ext_res$df)) {
+          extract_df(ext_res$df)
+          extract_json(ext_res$raw)
         }
       }
     )
-    updateTabsetPanel(session, "tabs", selected = "Extracted Fields")
+
+    updateTabsetPanel(session, "tabs", selected = "Extracted Fields - After Step 2")
   })
 
   # ---- Save profile ------------------------------------------------
@@ -1891,7 +2128,16 @@ observeEvent(input$run_bulk_extract, {
 
     tryCatch(
       {
-        prof_name <- save_profile_to_disk(name, input)
+        fields_vec <- get_fields_vector()
+        profile <- list(
+          field_list    = paste(fields_vec, collapse = "\n"),
+          user_prompt   = input$user_prompt,
+          ocr_model     = input$ocr_model,
+          extract_model = input$extract_model,
+          dpi           = input$dpi
+        )
+
+        prof_name <- save_profile_to_disk(name, profile)
         showNotification(paste("Profile saved:", prof_name), type = "message")
 
         # Refresh profile list in UI
@@ -1967,16 +2213,31 @@ observeEvent(input$run_bulk_extract, {
     if (is.null(prof)) return(NULL)
 
     if (!is.null(prof$field_list)) {
-      updateTextAreaInput(session, "field_list", value = prof$field_list)
+      fields_vec <- prof$field_list
+      if (is.character(fields_vec) && length(fields_vec) == 1) {
+        fields_vec <- strsplit(fields_vec, "\\r?\\n")[[1]]
+      }
+      if (!is.character(fields_vec)) fields_vec <- as.character(fields_vec)
+      fields_vec <- trimws(fields_vec)
+      fields_vec <- fields_vec[nzchar(fields_vec)]
+      if (length(fields_vec) == 0) fields_vec <- ""
+      fields_tbl(data.frame(Field = fields_vec, stringsAsFactors = FALSE))
+      fields_tbl_confirmed(data.frame(Field = fields_vec, stringsAsFactors = FALSE))
+      fields_confirmed_at(Sys.time())
+      fields_dirty(FALSE)
     }
     if (!is.null(prof$user_prompt)) {
       updateTextAreaInput(session, "user_prompt", value = prof$user_prompt)
     }
     if (!is.null(prof$ocr_model)) {
-      updateTextInput(session, "ocr_model", value = prof$ocr_model)
+      val <- as.character(prof$ocr_model)
+      if (identical(val, "deepseek-ocr")) val <- "deepseek-ocr:3b"
+      if (!val %in% c("mistral-small3.2", "deepseek-ocr:3b")) val <- "mistral-small3.2"
+      updateSelectInput(session, "ocr_model", selected = val)
     }
     if (!is.null(prof$extract_model)) {
-      updateTextInput(session, "extract_model", value = prof$extract_model)
+      # Extraction is restricted to gpt-oss
+      updateSelectInput(session, "extract_model", selected = "gpt-oss")
     }
     if (!is.null(prof$dpi)) {
       updateSliderInput(session, "dpi", value = prof$dpi)
@@ -2012,11 +2273,60 @@ observeEvent(input$run_bulk_extract, {
     }
   })
 
-  output$extract_table <- renderTable({
+  output$extract_dt <- DT::renderDT({
     df <- extract_df()
     if (is.null(df)) return(NULL)
-    df
+
+    disp <- df
+    if (!"source" %in% names(disp)) disp$source <- ""
+    disp <- disp[, c("name", "value", "confidence", "source"), drop = FALSE]
+    colnames(disp) <- c("Field", "Value", "Confidence", "Source")
+
+    DT::datatable(
+      disp,
+      rownames  = FALSE,
+      selection = "single",
+      editable  = list(target = "cell", disable = list(columns = c(1))),
+      options   = list(
+        dom       = "tip",
+        paging    = FALSE,
+        ordering  = FALSE,
+        autoWidth = TRUE
+      )
+    )
   })
+
+  observeEvent(input$extract_dt_cell_edit, {
+    info <- input$extract_dt_cell_edit
+    df <- extract_df()
+    if (is.null(df)) return()
+    if (!"source" %in% names(df)) df$source <- ""
+
+    r <- suppressWarnings(as.integer(info$row))
+    c <- suppressWarnings(as.integer(info$col))
+
+    # Guard against unexpected edit payloads
+    if (is.na(r) || is.na(c)) return()
+    if (r < 1 || r > nrow(df)) return()
+
+    # Displayed column order: Field, Value, Confidence, Source
+    col_map <- c("name", "value", "confidence", "source")
+    if (c < 1 || c > length(col_map)) return()
+
+    col <- col_map[c]
+    if (is.na(col) || col == "name") return()
+
+    if (col == "confidence") {
+      v <- suppressWarnings(as.numeric(info$value))
+      if (is.na(v)) return()
+      v <- max(0, min(1, v))
+      df[r, col] <- v
+    } else {
+      df[r, col] <- DT::coerceValue(info$value, df[r, col])
+    }
+
+    extract_df(df)
+  }, ignoreInit = TRUE)
 
   output$raw_json_output <- renderText({
     txt <- extract_json()
@@ -2058,7 +2368,8 @@ observeEvent(input$run_bulk_extract, {
         out_list <- lapply(seq_len(nrow(df)), function(i) {
           list(
             value      = df$value[i],
-            confidence = df$confidence[i]
+            confidence = df$confidence[i],
+            source     = if ("source" %in% names(df)) df$source[i] else ""
           )
         })
         names(out_list) <- df$name

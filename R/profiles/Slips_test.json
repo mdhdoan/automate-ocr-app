@@ -1,7 +1,7 @@
 {
-  "field_list": "Summary\nKeywords\nTopics\nEntities",
+  "field_list": "Captain's Name\nVessle's Name\nSpecies caught",
   "user_prompt": "Extract the requested fields as accurately as possible from the OCR text.",
   "ocr_model": "mistral-small3.2",
   "extract_model": "gpt-oss",
-  "dpi": 200
+  "dpi": 300
 }
