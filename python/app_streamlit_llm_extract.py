@@ -323,18 +323,28 @@ def build_pdf_previews(
     out_dir = _preview_dir_for_file(pp, file_id)
     ensure_dir(out_dir)
 
-    existing = list_preview_images(pp, file_record)
+    def _sort_key(p: Path) -> tuple[int, str]:
+        stem = p.stem.lower()
+        m = (
+            re.search(r"_page(\d+)\b", stem)
+            or re.search(r"\bpage[_\-]?(\d+)\b", stem)
+            or re.search(r"(\d+)$", stem)
+        )
+        page_num = int(m.group(1)) if m else 0
+        return (page_num, p.name)
+
+    existing = sorted(out_dir.rglob("*.png"), key=_sort_key)
     if existing and not force:
         return existing, None
 
     if force and out_dir.is_dir():
-        for p in out_dir.glob("*.png"):
+        for p in out_dir.rglob("*.png"):
             try:
                 p.unlink()
             except Exception:
                 pass
 
-    pages = list(range(1, max_pages + 1)) if max_pages and max_pages > 0 else None
+    pages = list(range(1, int(max_pages) + 1)) if max_pages and int(max_pages) > 0 else None
 
     try:
         outputs = convert_pdf2img(
@@ -345,13 +355,32 @@ def build_pdf_previews(
             zoom=float(zoom),
             rotate=int(rotate),
         )
-        imgs = [Path(x) for x in outputs if x]
-        imgs = [p for p in imgs if p.is_file()]
-        imgs = sorted(imgs, key=lambda p: p.name)
-        return imgs, None if imgs else "Rendered 0 preview images."
+
+        raw_paths: list[Path] = []
+        if outputs is None:
+            raw_paths = []
+        elif isinstance(outputs, (str, Path)):
+            raw_paths = [Path(outputs)]
+        elif isinstance(outputs, (list, tuple, set)):
+            raw_paths = [Path(x) for x in outputs if x]
+        else:
+            raw_paths = []
+
+        imgs = [p for p in raw_paths if p.is_file() and p.suffix.lower() == ".png"]
+
+        # fallback: scan the preview folder even if convert_pdf2img returned nothing usable
+        if not imgs:
+            imgs = sorted(out_dir.rglob("*.png"), key=_sort_key)
+
+        if imgs:
+            return imgs, None
+
+        return [], f"Rendered 0 preview images. Checked output dir: {out_dir}"
+
+    except TypeError as e:
+        return [], f"convert_pdf2img signature mismatch: {e}"
     except Exception as e:
         return [], f"Failed to render PDF previews: {e}"
-
 
 def ocr_images_with_ollama(ocr_model: str, images: list[Path], prompt: str) -> str | None:
     if ocr_image is None or not images:
@@ -425,10 +454,17 @@ def extract_text_local_only(
         t = extract_pdf_text_pymupdf(stored_path)
         if t:
             if build_previews:
-                imgs, _err = build_pdf_previews(pp, file_record, zoom=pdf_zoom, rotate=pdf_rotate, max_pages=pdf_max_pages, force=False)
-                if imgs:
-                    file_record["preview_images_count"] = len(imgs)
+                _imgs, _err = build_pdf_previews(
+                    pp, file_record, zoom=pdf_zoom, rotate=pdf_rotate, max_pages=pdf_max_pages, force=False
+                )
+                if _imgs:
+                    file_record["preview_images_count"] = len(_imgs)
                     file_record["preview_dir"] = str(_preview_dir_for_file(pp, str(file_record.get("file_id") or "")))
+                    file_record["preview_error"] = None
+                else:
+                    file_record["preview_images_count"] = 0
+                    file_record["preview_dir"] = str(_preview_dir_for_file(pp, str(file_record.get("file_id") or "")))
+                    file_record["preview_error"] = _err
             return t, "pymupdf_text", None
 
         if ocr_image is None:
@@ -1715,7 +1751,11 @@ elif page == "Review":
                             page0 = st.slider("Page", min_value=1, max_value=len(imgs), value=1, key=f"page_{fid_choice}")
                             st.image(str(imgs[page0 - 1]), caption=imgs[page0 - 1].name)
                         else:
-                            st.info("No PDF page images stored yet. Re-run extraction with 'Store PDF page images' enabled (or force rebuild).")
+                            preview_err = (f.get("preview_error") or "").strip()
+                            if preview_err:
+                                st.warning(f"No PDF page images stored yet. Preview error: {preview_err}")
+                            else:
+                                st.info("No PDF page images stored yet. Re-run extraction with 'Store PDF page images' enabled (or force rebuild).")
                     elif stored_path.is_file() and is_image(f):
                         st.image(str(stored_path), caption=stored_path.name)
 
