@@ -1,19 +1,11 @@
-# app_streamlit_llm_extract_updated.py
-# Run: streamlit run app_streamlit_llm_extract_updated.py
-#
-# Local-only workflow (Option A):
-# - PDFs: render to images via PyMuPDF (convert_to_img.py) -> OCR via Ollama vision (ocr.py) -> merged text layer
-# - Images: OCR via Ollama vision (ocr.py)
-# - TXT: used directly
-# - Review tab: shows stored PDF page images (previews) alongside extracted text + fields for validation
-
 from __future__ import annotations
 
 import json
 import os
 import re
-import uuid
 import shutil
+import sys
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -22,47 +14,39 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-from llm_extract_core import answer_questions_json, answer_questions_json_chunked
+from llm_extract_core import (
+    answer_questions_json,
+    answer_questions_json_chunked,
+    answer_questions_json_chunked_evidence,
+    answer_questions_json_evidence,
+)
 
 # --- User-provided local OCR module ---
-# Expecting: ocr.py with ocr_image(model, image_path, prompt) + DEFAULT_PROMPT
 try:
-    from ocr import ocr_image, DEFAULT_PROMPT  # type: ignore
+    from ocr import DEFAULT_PROMPT, ocr_image  # type: ignore
 except Exception:
     ocr_image = None  # type: ignore
     DEFAULT_PROMPT = "Extract all readable text from this image. Return plain text only."
 
 # --- User-provided PDF->images module ---
-# Expecting: convert_to_img.py with convert_pdf2img(...)
-
-import sys
-from pathlib import Path
-
-THIS_DIR = Path(__file__).resolve().parent          # .../python
-REPO_ROOT = THIS_DIR.parent                         # .../automate-ocr-app
-
+THIS_DIR = Path(__file__).resolve().parent
+REPO_ROOT = THIS_DIR.parent
 for p in (str(REPO_ROOT), str(THIS_DIR)):
     if p not in sys.path:
         sys.path.insert(0, p)
+
 try:
     from convert_to_img import convert_pdf2img  # type: ignore
-
 except ModuleNotFoundError as e:
     convert_pdf2img = None  # type: ignore
     st.error(f"Module not found: {e}")
     st.write("CWD:", os.getcwd())
-    st.write("__file__ dir:", str(Path(__file__).resolve().parent))
+    st.write("__file__ dir:", str(THIS_DIR))
     st.write("sys.path (top):", sys.path[:5])
-
 except Exception as e:
-    # This is the big one: shows the real reason (missing pymupdf, etc.)
     st.exception(e)
     convert_pdf2img = None
     raise
-# try:
-#     from convert_to_img import convert_pdf2img  # type: ignore
-# except Exception:
-#     convert_pdf2img = None  # type: ignore
 
 
 # ---------------- Paths ----------------
@@ -128,10 +112,6 @@ def parse_ctx_from_show(show_text: str) -> int | None:
 
 
 def get_text_path(file_record: dict) -> Path | None:
-    """
-    Return a valid Path to the extracted text layer if it exists and is a file.
-    Prevents Path("") -> "." causing IsADirectoryError.
-    """
     raw = (file_record or {}).get("text_path")
     if not raw:
         return None
@@ -240,7 +220,6 @@ def create_project(name: str) -> str:
 
 
 def delete_project(slug: str) -> tuple[bool, str]:
-    """Delete a project folder (dangerous). Returns (ok, message)."""
     slug = (slug or "").strip()
     if not slug:
         return False, "No project selected."
@@ -287,7 +266,6 @@ def save_files_manifest(pp: ProjectPaths, files_manifest: dict) -> None:
 
 
 def update_file_record_in_manifest(pp: ProjectPaths, file_id: str, updates: dict) -> None:
-    """Update a file record in files.json (in-place) and persist."""
     try:
         mf = load_files_manifest(pp)
         files = mf.get("files", [])
@@ -306,9 +284,6 @@ def _preview_dir_for_file(pp: ProjectPaths, file_id: str) -> Path:
 
 
 def list_preview_images(pp: ProjectPaths, file_record: dict) -> list[Path]:
-    """
-    Returns existing preview images (PNG) for a PDF, sorted by page.
-    """
     file_id = str(file_record.get("file_id") or "").strip()
     if not file_id:
         return []
@@ -334,10 +309,6 @@ def build_pdf_previews(
     max_pages: int,
     force: bool = False,
 ) -> tuple[list[Path], str | None]:
-    """
-    Render PDF pages to PNGs using convert_to_img.py (PyMuPDF) and store under project/previews/<file_id>/.
-    Returns: (image_paths, error)
-    """
     if convert_pdf2img is None:
         return [], "convert_to_img.py is not importable (convert_pdf2img missing)."
 
@@ -383,12 +354,7 @@ def build_pdf_previews(
 
 
 def ocr_images_with_ollama(ocr_model: str, images: list[Path], prompt: str) -> str | None:
-    """
-    OCR each image with user-provided ocr.py (ocr_image) and merge into one text blob.
-    """
-    if ocr_image is None:
-        return None
-    if not images:
+    if ocr_image is None or not images:
         return None
 
     parts: list[str] = []
@@ -407,10 +373,6 @@ def ocr_images_with_ollama(ocr_model: str, images: list[Path], prompt: str) -> s
 
 
 def extract_pdf_text_pymupdf(pdf_path: Path) -> str | None:
-    """
-    Optional fast path: extract embedded text from a text-native PDF using PyMuPDF.
-    Returns None if PyMuPDF isn't available or PDF yields no useful text.
-    """
     try:
         import pymupdf  # type: ignore
     except Exception:
@@ -427,7 +389,7 @@ def extract_pdf_text_pymupdf(pdf_path: Path) -> str | None:
                 page = doc.load_page(i)
                 t = (page.get_text("text") or "").strip()
                 if t:
-                    pieces.append(t)
+                    pieces.append(f"===== PAGE {i + 1} ({pdf_path.name}) =====\n{t}")
             out = "\n\n".join(pieces).strip()
             return out if len(out) >= 300 else None
         finally:
@@ -447,10 +409,6 @@ def extract_text_local_only(
     pdf_max_pages: int,
     build_previews: bool,
 ) -> tuple[str | None, str, str | None]:
-    """
-    Returns: (text_or_none, method, error)
-    Methods: txt | pymupdf_text | ollama_ocr_pdf | ollama_ocr_img | unsupported
-    """
     stored_path = Path(str(file_record.get("stored_path") or ""))
     if not stored_path.is_file():
         return None, "unsupported", "Stored file path missing or not a file."
@@ -467,21 +425,16 @@ def extract_text_local_only(
         t = extract_pdf_text_pymupdf(stored_path)
         if t:
             if build_previews:
-                _imgs, _err = build_pdf_previews(
-                    pp, file_record, zoom=pdf_zoom, rotate=pdf_rotate, max_pages=pdf_max_pages, force=False
-                )
-                if _imgs:
-                    file_record["preview_images_count"] = len(_imgs)
+                imgs, _err = build_pdf_previews(pp, file_record, zoom=pdf_zoom, rotate=pdf_rotate, max_pages=pdf_max_pages, force=False)
+                if imgs:
+                    file_record["preview_images_count"] = len(imgs)
                     file_record["preview_dir"] = str(_preview_dir_for_file(pp, str(file_record.get("file_id") or "")))
             return t, "pymupdf_text", None
 
         if ocr_image is None:
             return None, "ollama_ocr_pdf", "ocr.py is not importable (ocr_image missing)."
 
-        imgs: list[Path] = []
-        imgs, err = build_pdf_previews(
-            pp, file_record, zoom=pdf_zoom, rotate=pdf_rotate, max_pages=pdf_max_pages, force=False
-        )
+        imgs, err = build_pdf_previews(pp, file_record, zoom=pdf_zoom, rotate=pdf_rotate, max_pages=pdf_max_pages, force=False)
         if err and not imgs:
             return None, "ollama_ocr_pdf", err
 
@@ -512,9 +465,6 @@ def ensure_text_layer_for_file(
     pdf_max_pages: int,
     build_previews: bool,
 ) -> dict:
-    """
-    Ensure file_record has a text layer (text/<file_id>.txt). Updates file_record in-place-ish and returns it.
-    """
     file_id = str(file_record.get("file_id") or "").strip()
     if not file_id:
         file_record["status"] = "failed"
@@ -568,7 +518,6 @@ def ensure_text_layer_for_file(
 
 # ---------------- Standards / structures / runs ----------------
 def list_standard_versions(pp: ProjectPaths) -> list[Path]:
-    """Return standard version files, newest first (vN descending)."""
     ensure_project_layout(pp)
     files = [p for p in pp.standards_dir.glob("standard_v*.json") if p.is_file()]
 
@@ -602,7 +551,6 @@ def save_standard(pp: ProjectPaths, standard: dict) -> Path:
 
 
 def list_structure_versions(pp: ProjectPaths) -> list[Path]:
-    """Return structure version files, newest first (vN descending)."""
     ensure_project_layout(pp)
     files = [p for p in pp.structures_dir.glob("structure_v*.txt") if p.is_file()]
 
@@ -637,7 +585,6 @@ def list_runs(pp: ProjectPaths) -> list[Path]:
 
 
 def count_runs_using_standard(pp: ProjectPaths, standard_filename: str) -> int:
-    """How many saved runs reference this standard file name."""
     if not standard_filename:
         return 0
     cnt = 0
@@ -649,7 +596,6 @@ def count_runs_using_standard(pp: ProjectPaths, standard_filename: str) -> int:
 
 
 def count_runs_using_structure(pp: ProjectPaths, structure_filename: str) -> int:
-    """How many saved runs reference this structure file name."""
     if not structure_filename:
         return 0
     cnt = 0
@@ -716,30 +662,64 @@ def build_context_note(base: str, standard: dict | None, structure_text: str | N
     return "\n\n".join(parts).strip()
 
 
-def normalize_answers(result: Any, questions: list[str]) -> dict[str, Any]:
-    """
-    Handles a few possible shapes:
-    - {"answers": {"0": "...", "1": "..."}}
-    - {"answers": {"question text": "..."}}
-    - {"0": "..."} or {"question text": "..."}
-    - llm_extract_core.py returns {question -> answer}
-    """
+def normalize_answer_payload(result: Any, questions: list[str]) -> dict[str, dict[str, Any]]:
     if isinstance(result, dict):
         ans = result.get("answers") if isinstance(result.get("answers"), dict) else result
-        if not isinstance(ans, dict):
-            return {}
-        out: dict[str, Any] = {}
-        for i, q in enumerate(questions):
-            if q in ans:
-                out[q] = ans.get(q)
-                continue
-            k = str(i)
-            if k in ans:
-                out[q] = ans.get(k)
-                continue
-            out[q] = None
-        return out
-    return {q: None for q in questions}
+    else:
+        ans = {}
+
+    if not isinstance(ans, dict):
+        ans = {}
+
+    def _to_float(v: Any) -> float | None:
+        try:
+            if v is None or str(v).strip() == "":
+                return None
+            return float(str(v).strip())
+        except Exception:
+            return None
+
+    def _to_int(v: Any) -> int | None:
+        try:
+            if v is None or str(v).strip() == "":
+                return None
+            return int(float(str(v).strip()))
+        except Exception:
+            return None
+
+    out: dict[str, dict[str, Any]] = {}
+    for i, q in enumerate(questions):
+        raw = ans.get(q)
+        if raw is None:
+            raw = ans.get(str(i))
+
+        if isinstance(raw, dict):
+            loc = raw.get("excerpt_location") if isinstance(raw.get("excerpt_location"), dict) else {}
+            value = raw.get("value")
+            out[q] = {
+                "value": None if value is None or not str(value).strip() else str(value).strip(),
+                "confidence": _to_float(raw.get("confidence")),
+                "excerpt_location": {
+                    "page": _to_int(loc.get("page")),
+                    "sentence": str(loc.get("sentence") or "").strip() or None,
+                },
+                "source": str(raw.get("source") or "model"),
+            }
+        else:
+            value = None if raw is None or not str(raw).strip() else str(raw).strip()
+            out[q] = {
+                "value": value,
+                "confidence": None,
+                "excerpt_location": {"page": None, "sentence": None},
+                "source": "model",
+            }
+
+    return out
+
+
+def normalize_answers(result: Any, questions: list[str]) -> dict[str, Any]:
+    payload = normalize_answer_payload(result, questions)
+    return {q: payload.get(q, {}).get("value") for q in questions}
 
 
 def compute_validation_issues(fields: list[dict], answers_by_field: dict[str, Any]) -> dict:
@@ -777,6 +757,62 @@ def completeness_ratio(fields: list[dict], answers_by_field: dict[str, Any]) -> 
         if str(v).strip():
             filled += 1
     return filled / len(names)
+
+
+def _empty_detail_payload(questions: list[str], source: str = "missing_text") -> dict[str, dict[str, Any]]:
+    return {
+        q: {
+            "value": None,
+            "confidence": None,
+            "excerpt_location": {"page": None, "sentence": None},
+            "source": source,
+        }
+        for q in questions
+    }
+
+
+def run_extraction_with_details(
+    *,
+    model_name: str,
+    doc_text: str,
+    questions: list[str],
+    context_note: str,
+    force_chunking_flag: bool,
+    token_threshold: int,
+    chunk_chars: int,
+    overlap_chars: int,
+    show_text: str,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]], int, bool]:
+    tok_est = estimate_tokens(doc_text)
+    ctx = parse_ctx_from_show(show_text)
+    ctx_threshold = int(ctx * 0.8) if ctx else None
+    effective_threshold = int(token_threshold)
+    if ctx_threshold:
+        effective_threshold = min(effective_threshold, ctx_threshold)
+
+    auto_chunk = tok_est > effective_threshold
+    use_chunked = force_chunking_flag or auto_chunk
+
+    if use_chunked:
+        raw = answer_questions_json_chunked_evidence(
+            model=model_name,
+            document_text=doc_text,
+            questions=questions,
+            context_note=context_note,
+            max_chars=int(chunk_chars),
+            overlap=int(overlap_chars),
+        )
+    else:
+        raw = answer_questions_json_evidence(
+            model=model_name,
+            document_text=doc_text,
+            questions=questions,
+            context_note=context_note,
+        )
+
+    payload = normalize_answer_payload(raw, questions)
+    flat = {q: payload[q]["value"] for q in questions}
+    return flat, payload, tok_est, bool(use_chunked)
 
 
 # ---------------- Ingest ----------------
@@ -829,14 +865,12 @@ ensure_dir(PROJECTS_ROOT)
 st.set_page_config(page_title="Project OCR/Text → LLM Extract → Review", layout="wide")
 st.title("Project OCR/Text → LLM Extract → Review")
 
-# Sidebar navigation
 page = st.sidebar.radio(
     "Navigate",
     ["Projects", "Ingest", "Data Standard", "Structure", "Run Extraction", "Review", "Export"],
     index=0,
 )
 
-# ---- Project selection (sticky) ----
 st.sidebar.markdown("---")
 projects = list_projects()
 proj_labels = ["(none)"] + [f"{name}  —  {slug}" for slug, name in projects]
@@ -863,10 +897,12 @@ manifest = load_project_manifest(pp) if pp else None
 st.sidebar.markdown("---")
 st.sidebar.subheader("Models (Ollama)")
 
+
 @st.cache_data(ttl=10)
 def list_ollama_models() -> list[str]:
     try:
         import subprocess
+
         out = subprocess.check_output(["ollama", "list"], text=True, stderr=subprocess.STDOUT)
     except Exception:
         return []
@@ -887,14 +923,17 @@ def list_ollama_models() -> list[str]:
             uniq.append(m)
     return uniq
 
+
 @st.cache_data(ttl=60)
 def ollama_show_raw(model: str) -> str:
     try:
         import subprocess
+
         out = subprocess.check_output(["ollama", "show", model], text=True, stderr=subprocess.STDOUT)
         return out.strip()
     except Exception as e:
         return f"Failed to run: ollama show {model}\n{e}"
+
 
 def infer_tags_from_show(model: str, show_text: str) -> list[str]:
     n = (model or "").lower()
@@ -919,18 +958,19 @@ def infer_tags_from_show(model: str, show_text: str) -> list[str]:
         tags.append("long-doc")
     return tags or ["general"]
 
+
 @st.cache_data(ttl=60)
 def model_meta(model: str) -> dict:
     show_text = ollama_show_raw(model)
     tags = infer_tags_from_show(model, show_text)
     return {"show": show_text, "tags": tags}
 
+
 models = list_ollama_models()
 if st.sidebar.button("Refresh models"):
     st.cache_data.clear()
     models = list_ollama_models()
 
-# ---- OCR controls first (requested) ----
 st.sidebar.markdown("---")
 st.sidebar.subheader("OCR (Local)")
 
@@ -953,12 +993,10 @@ else:
     )
 
 ocr_prompt = st.sidebar.text_area("OCR prompt", value=DEFAULT_PROMPT, height=80)
-
 pdf_zoom = st.sidebar.slider("PDF render zoom", min_value=1.0, max_value=4.0, value=2.0, step=0.25)
 pdf_rotate = st.sidebar.selectbox("PDF rotate", options=[0, 90, 180, 270], index=0)
 pdf_max_pages = st.sidebar.number_input("Max PDF pages to render/store", min_value=1, max_value=500, value=60, step=10)
 
-# ---- General extraction model selection AFTER OCR (requested) ----
 st.sidebar.markdown("---")
 st.sidebar.subheader("LLM (Extraction)")
 annotate = st.sidebar.toggle("Annotate model dropdown", value=True, key="llm_annotate")
@@ -969,9 +1007,11 @@ if not models:
 else:
     default_model = "gemma3" if "gemma3" in models else models[0]
     if annotate:
+
         def _fmt(m: str) -> str:
             mm = model_meta(m)
             return f"{m}  —  {', '.join(mm['tags'])}"
+
         model = st.sidebar.selectbox("LLM model", models, index=models.index(default_model), format_func=_fmt, key="llm_model_select")
     else:
         model = st.sidebar.selectbox("LLM model", models, index=models.index(default_model), key="llm_model_select")
@@ -980,7 +1020,6 @@ else:
     with st.sidebar.expander("ollama show"):
         st.sidebar.code(meta["show"], language="text")
 
-# ---- Common extraction controls (global) ----
 st.sidebar.markdown("---")
 st.sidebar.subheader("Extraction controls")
 force_chunking = st.sidebar.toggle("Force chunking mode", value=False)
@@ -1156,12 +1195,9 @@ elif page == "Data Standard":
         base_std: dict = {"fields": []}
         base_name = ""
         if version_names:
-            if load_choice == "(latest)":
-                base_path = versions[0]
-            else:
-                base_path = pp.standards_dir / load_choice
+            base_path = versions[0] if load_choice == "(latest)" else pp.standards_dir / load_choice
             base_name = base_path.name
-            base_std = load_standard(pp, base_path) if base_path else {"fields": []}
+            base_std = load_standard(pp, base_path)
 
         with st.expander("Optional: import a standard JSON to edit", expanded=False):
             up = st.file_uploader("Upload standard JSON", type=["json"], key="std_import_uploader")
@@ -1241,18 +1277,13 @@ elif page == "Data Standard":
             if not versions:
                 st.info("No standard versions to delete.")
             else:
-                allow_latest = st.checkbox(
-                    "Allow deleting the latest version (risky)",
-                    value=False,
-                    key="std_delete_allow_latest",
-                )
+                allow_latest = st.checkbox("Allow deleting the latest version (risky)", value=False, key="std_delete_allow_latest")
                 candidates = versions if allow_latest else versions[1:]
                 if not candidates:
                     st.info("Only one version exists; nothing to delete.")
                 else:
                     opts: list[str] = []
                     label_to_path: dict[str, Path] = {}
-
                     for p in candidates:
                         meta0 = read_json(p, {}) if p.exists() else {}
                         v0 = meta0.get("version")
@@ -1313,13 +1344,9 @@ elif page == "Structure":
         base_text = ""
         base_name = ""
         if version_names:
-            if load_choice == "(latest)":
-                base_path = versions[0]
-                base_name = versions[0].name
-            else:
-                base_path = pp.structures_dir / load_choice
-                base_name = load_choice
-            base_text = base_path.read_text(encoding="utf-8") if base_path and base_path.exists() else ""
+            base_path = versions[0] if load_choice == "(latest)" else pp.structures_dir / load_choice
+            base_name = base_path.name
+            base_text = base_path.read_text(encoding="utf-8") if base_path.exists() else ""
 
         if base_name:
             st.caption(f"Editing from: **{base_name}** (saving creates a new version)")
@@ -1349,18 +1376,13 @@ elif page == "Structure":
             if not versions:
                 st.info("No structure versions to delete.")
             else:
-                allow_latest = st.checkbox(
-                    "Allow deleting the latest version (risky)",
-                    value=False,
-                    key="struct_delete_allow_latest",
-                )
+                allow_latest = st.checkbox("Allow deleting the latest version (risky)", value=False, key="struct_delete_allow_latest")
                 candidates = versions if allow_latest else versions[1:]
                 if not candidates:
                     st.info("Only one version exists; nothing to delete.")
                 else:
                     opts: list[str] = []
                     label_to_path: dict[str, Path] = {}
-
                     for p in candidates:
                         m0 = re.search(r"structure_v(\d+)\.txt$", p.name)
                         v0 = int(m0.group(1)) if m0 else "?"
@@ -1470,6 +1492,7 @@ elif page == "Run Extraction":
                     "structure_file": struct_choice if struct_choice != "(none)" else None,
                     "files": [],
                     "outputs": {},
+                    "output_details": {},
                     "validation": {},
                     "audit": [],
                     "params": {
@@ -1499,9 +1522,7 @@ elif page == "Run Extraction":
                             continue
 
                         if build_previews and force_rebuild_previews and is_pdf(f):
-                            imgs, perr = build_pdf_previews(
-                                pp, f, zoom=float(pdf_zoom), rotate=int(pdf_rotate), max_pages=int(pdf_max_pages), force=True
-                            )
+                            imgs, perr = build_pdf_previews(pp, f, zoom=float(pdf_zoom), rotate=int(pdf_rotate), max_pages=int(pdf_max_pages), force=True)
                             if imgs:
                                 f["preview_dir"] = str(_preview_dir_for_file(pp, fid))
                                 f["preview_images_count"] = len(imgs)
@@ -1528,6 +1549,7 @@ elif page == "Run Extraction":
                         text_path = get_text_path(f)
                         if not text_path:
                             run_record["outputs"][fid] = {q: None for q in questions}
+                            run_record["output_details"][fid] = _empty_detail_payload(questions)
                             run_record["validation"][fid] = {
                                 "status": "unverified",
                                 "note": f"No extracted text layer available. status={f.get('status')} error={f.get('error')} method={f.get('text_method')}",
@@ -1546,41 +1568,22 @@ elif page == "Run Extraction":
                             continue
 
                         doc_text = text_path.read_text(encoding="utf-8", errors="replace")
-
-                        tok_est = estimate_tokens(doc_text)
-                        ctx = parse_ctx_from_show(meta.get("show", ""))
-                        ctx_threshold = int(ctx * 0.8) if ctx else None
-                        effective_threshold = int(TOKEN_THRESHOLD)
-                        if ctx_threshold:
-                            effective_threshold = min(effective_threshold, ctx_threshold)
-
-                        auto_chunk = tok_est > effective_threshold
-                        use_chunked = force_chunking or auto_chunk
-
-                        if use_chunked:
-                            raw = answer_questions_json_chunked(
-                                model=model,
-                                document_text=doc_text,
-                                questions=questions,
-                                context_note=ctx_full,
-                                max_chars=int(chunk_chars),
-                                overlap=int(overlap_chars),
-                            )
-                        else:
-                            raw = answer_questions_json(
-                                model=model,
-                                document_text=doc_text,
-                                questions=questions,
-                                context_note=ctx_full,
-                            )
-
-                        answers_by_question = normalize_answers(raw, questions)
-                        answers_by_field = {q: answers_by_question.get(q) for q in questions}
+                        answers_by_field, answer_payload, tok_est, use_chunked = run_extraction_with_details(
+                            model_name=model,
+                            doc_text=doc_text,
+                            questions=questions,
+                            context_note=ctx_full,
+                            force_chunking_flag=bool(force_chunking),
+                            token_threshold=int(TOKEN_THRESHOLD),
+                            chunk_chars=int(chunk_chars),
+                            overlap_chars=int(overlap_chars),
+                            show_text=meta.get("show", ""),
+                        )
                         issues = compute_validation_issues(fields, answers_by_field) if fields else {"missing_required": [], "format_errors": []}
 
                         run_record["outputs"][fid] = answers_by_field
+                        run_record["output_details"][fid] = answer_payload
                         run_record["validation"][fid] = {"status": "unverified", "note": "", "issues": issues}
-
                         run_record["files"].append(
                             {
                                 "file_id": fid,
@@ -1628,6 +1631,7 @@ elif page == "Review":
             mf = load_files_manifest(pp)
             files = {f["file_id"]: f for f in mf.get("files", []) if f.get("file_id")}
             outputs: dict = run.get("outputs", {}) or {}
+            output_details: dict = run.get("output_details", {}) or {}
             validation: dict = run.get("validation", {}) or {}
 
             standard_file = run.get("standard_file")
@@ -1694,6 +1698,7 @@ elif page == "Review":
             if fid_choice:
                 f = files.get(fid_choice, {})
                 out = outputs.get(fid_choice) or {}
+                detail_out = output_details.get(fid_choice) or {}
                 val = validation.get(fid_choice) or {"status": "unverified", "note": "", "issues": {}}
 
                 left, right = st.columns([1.35, 1], gap="large")
@@ -1703,7 +1708,6 @@ elif page == "Review":
                     st.caption(f"Metadata: {f.get('metadata')}")
 
                     stored_path = Path(str(f.get("stored_path") or ""))
-
                     if stored_path.suffix.lower() == ".pdf":
                         imgs = list_preview_images(pp, f)
                         if imgs:
@@ -1712,28 +1716,45 @@ elif page == "Review":
                             st.image(str(imgs[page0 - 1]), caption=imgs[page0 - 1].name)
                         else:
                             st.info("No PDF page images stored yet. Re-run extraction with 'Store PDF page images' enabled (or force rebuild).")
-
                     elif stored_path.is_file() and is_image(f):
                         st.image(str(stored_path), caption=stored_path.name)
 
                     st.markdown("### Fields")
                     if not isinstance(out, dict):
                         out = {}
+                    if not isinstance(detail_out, dict):
+                        detail_out = {}
 
-                    field_rows = (
-                        [{"field": k, "value": ("" if out.get(k) is None else str(out.get(k)))} for k in fields_list]
-                        if fields_list
-                        else [{"field": k, "value": "" if out.get(k) is None else str(out.get(k))} for k in out.keys()]
-                    )
+                    field_names = fields_list if fields_list else list(out.keys())
+                    field_rows = []
+                    for k in field_names:
+                        d = detail_out.get(k) if isinstance(detail_out.get(k), dict) else {}
+                        loc = d.get("excerpt_location") if isinstance(d.get("excerpt_location"), dict) else {}
+                        value = d.get("value") if "value" in d else out.get(k)
+                        field_rows.append(
+                            {
+                                "field": k,
+                                "value": "" if value is None else str(value),
+                                "confidence": d.get("confidence"),
+                                "page": loc.get("page"),
+                                "excerpt_sentence": loc.get("sentence") or "",
+                                "source": d.get("source") or "model",
+                            }
+                        )
+
                     fdf = pd.DataFrame(field_rows)
                     edited = st.data_editor(
                         fdf,
                         width="stretch",
+                        hide_index=True,
                         column_config={
                             "field": st.column_config.TextColumn(disabled=True),
                             "value": st.column_config.TextColumn(),
+                            "confidence": st.column_config.NumberColumn(disabled=True, format="%.3f"),
+                            "page": st.column_config.NumberColumn(disabled=True),
+                            "excerpt_sentence": st.column_config.TextColumn(disabled=True, width="large"),
+                            "source": st.column_config.TextColumn(disabled=True),
                         },
-                        hide_index=True,
                     )
 
                 with right:
@@ -1779,7 +1800,6 @@ elif page == "Review":
                             out_text_path = pp.text_dir / f"{fid_choice}.txt"
                             ensure_dir(out_text_path.parent)
                             out_text_path.write_text((edited_doc_text or ""), encoding="utf-8")
-
                             update_file_record_in_manifest(
                                 pp,
                                 fid_choice,
@@ -1791,15 +1811,7 @@ elif page == "Review":
                                     "processed_at": now_iso(),
                                 },
                             )
-                            append_jsonl(
-                                pp.audit,
-                                {
-                                    "ts": now_iso(),
-                                    "action": "file.text_layer_manual_edit",
-                                    "project": pp.root.name,
-                                    "file_id": fid_choice,
-                                },
-                            )
+                            append_jsonl(pp.audit, {"ts": now_iso(), "action": "file.text_layer_manual_edit", "project": pp.root.name, "file_id": fid_choice})
                             st.success("Saved text layer.")
                         except Exception as e:
                             st.error(f"Failed to save text layer: {e}")
@@ -1856,7 +1868,6 @@ elif page == "Review":
                         if rerun_now:
                             try:
                                 text_to_use = edited_doc_text or ""
-
                                 if persist_text_first:
                                     out_text_path = pp.text_dir / f"{fid_choice}.txt"
                                     ensure_dir(out_text_path.parent)
@@ -1874,53 +1885,26 @@ elif page == "Review":
                                     )
                                     append_jsonl(
                                         pp.audit,
-                                        {
-                                            "ts": now_iso(),
-                                            "action": "file.text_layer_saved_before_rerun",
-                                            "project": pp.root.name,
-                                            "file_id": fid_choice,
-                                        },
+                                        {"ts": now_iso(), "action": "file.text_layer_saved_before_rerun", "project": pp.root.name, "file_id": fid_choice},
                                     )
 
                                 params = run.get("params") or {}
-                                force_chunk = bool(params.get("force_chunking", False))
-                                token_threshold = int(params.get("token_threshold", TOKEN_THRESHOLD))
-                                chunk_chars = int(params.get("chunk_chars", 12000))
-                                overlap_chars = int(params.get("overlap_chars", 800))
-
-                                tok_est = estimate_tokens(text_to_use)
                                 rerun_meta = model_meta(rerun_model) if models else {"show": ""}
-                                ctx = parse_ctx_from_show((rerun_meta or {}).get("show", ""))
-                                ctx_threshold = int(ctx * 0.8) if ctx else None
-                                effective_threshold = int(token_threshold)
-                                if ctx_threshold:
-                                    effective_threshold = min(effective_threshold, ctx_threshold)
-                                auto_chunk = tok_est > effective_threshold
-                                use_chunked = force_chunk or auto_chunk
-
-                                if use_chunked:
-                                    raw = answer_questions_json_chunked(
-                                        model=rerun_model,
-                                        document_text=text_to_use,
-                                        questions=questions_for_rerun,
-                                        context_note=ctx_for_rerun,
-                                        max_chars=chunk_chars,
-                                        overlap=overlap_chars,
-                                    )
-                                else:
-                                    raw = answer_questions_json(
-                                        model=rerun_model,
-                                        document_text=text_to_use,
-                                        questions=questions_for_rerun,
-                                        context_note=ctx_for_rerun,
-                                    )
-
-                                answers_by_question = normalize_answers(raw, questions_for_rerun)
-                                answers_by_field = {q: answers_by_question.get(q) for q in questions_for_rerun}
+                                answers_by_field, answer_payload, tok_est, use_chunked = run_extraction_with_details(
+                                    model_name=rerun_model,
+                                    doc_text=text_to_use,
+                                    questions=questions_for_rerun,
+                                    context_note=ctx_for_rerun,
+                                    force_chunking_flag=bool(params.get("force_chunking", False)),
+                                    token_threshold=int(params.get("token_threshold", TOKEN_THRESHOLD)),
+                                    chunk_chars=int(params.get("chunk_chars", 12000)),
+                                    overlap_chars=int(params.get("overlap_chars", 800)),
+                                    show_text=(rerun_meta or {}).get("show", ""),
+                                )
 
                                 issues2 = compute_validation_issues(std_fields, answers_by_field) if std_fields else {"missing_required": [], "format_errors": []}
-
                                 outputs[fid_choice] = answers_by_field
+                                output_details[fid_choice] = answer_payload
                                 validation[fid_choice] = {
                                     "status": "unverified",
                                     "note": f"Re-run on {now_iso()} with model={rerun_model}",
@@ -1952,8 +1936,8 @@ elif page == "Review":
                                         }
                                     )
                                 run["files"] = run_files
-
                                 run["outputs"] = outputs
+                                run["output_details"] = output_details
                                 run["validation"] = validation
                                 run["audit"] = run.get("audit") or []
                                 run["audit"].append(
@@ -1988,28 +1972,53 @@ elif page == "Review":
 
                     save_btn = st.button("Save changes", type="primary")
                     if save_btn:
-                        new_out = dict(out)
+                        new_out: dict[str, Any] = {}
+                        new_detail_out: dict[str, Any] = {}
+                        changed_fields: list[str] = []
+
                         for _, r in edited.iterrows():
                             k = str(r["field"]).strip()
                             v = str(r["value"]).strip()
-                            new_out[k] = v if v else None
+                            new_v = v if v else None
+
+                            old_detail = detail_out.get(k) if isinstance(detail_out.get(k), dict) else {}
+                            old_v = old_detail.get("value")
+                            changed = str(old_v or "") != str(new_v or "")
+                            if changed:
+                                changed_fields.append(k)
+                                new_detail_out[k] = {
+                                    "value": new_v,
+                                    "confidence": None,
+                                    "excerpt_location": {"page": None, "sentence": None},
+                                    "source": "manual_review",
+                                }
+                            else:
+                                new_detail_out[k] = {
+                                    "value": new_v,
+                                    "confidence": old_detail.get("confidence"),
+                                    "excerpt_location": old_detail.get("excerpt_location") if isinstance(old_detail.get("excerpt_location"), dict) else {"page": None, "sentence": None},
+                                    "source": old_detail.get("source") or "model",
+                                }
+                            new_out[k] = new_v
+
+                        issues = compute_validation_issues(std_fields, new_out) if std_fields else {"missing_required": [], "format_errors": []}
 
                         if status == "flagged" and not note.strip():
                             st.error("Flagged requires a note/reason.")
                         else:
-                            before = outputs.get(fid_choice) or {}
                             outputs[fid_choice] = new_out
+                            output_details[fid_choice] = new_detail_out
                             validation[fid_choice] = {"status": status, "note": note, "issues": issues, "updated_at": now_iso()}
                             run["outputs"] = outputs
+                            run["output_details"] = output_details
                             run["validation"] = validation
-
                             run["audit"] = run.get("audit") or []
                             run["audit"].append(
                                 {
                                     "ts": now_iso(),
                                     "action": "review.save",
                                     "file_id": fid_choice,
-                                    "changed_fields": [k for k in new_out.keys() if str(before.get(k)) != str(new_out.get(k))],
+                                    "changed_fields": changed_fields,
                                     "status": status,
                                 }
                             )
@@ -2018,7 +2027,15 @@ elif page == "Review":
                             write_json(run_path, run)
                             append_jsonl(
                                 pp.audit,
-                                {"ts": now_iso(), "action": "run.update_file", "project": pp.root.name, "run_id": run.get("run_id"), "file_id": fid_choice, "status": status, "note": note},
+                                {
+                                    "ts": now_iso(),
+                                    "action": "run.update_file",
+                                    "project": pp.root.name,
+                                    "run_id": run.get("run_id"),
+                                    "file_id": fid_choice,
+                                    "status": status,
+                                    "note": note,
+                                },
                             )
                             st.success("Saved.")
                             st.rerun()
@@ -2039,6 +2056,7 @@ elif page == "Export":
             scope = st.selectbox("Scope", ["all", "verified only", "flagged only", "unverified only"], index=0)
 
             outputs: dict = run.get("outputs", {}) or {}
+            output_details: dict = run.get("output_details", {}) or {}
             validation: dict = run.get("validation", {}) or {}
 
             mf = load_files_manifest(pp)
@@ -2058,7 +2076,6 @@ elif page == "Export":
 
                 f = files.get(fid) or {}
                 meta0 = f.get("metadata") or {}
-
                 row = {
                     "project": pp.root.name,
                     "run_id": run.get("run_id"),
@@ -2072,6 +2089,14 @@ elif page == "Export":
                 }
                 if isinstance(out, dict):
                     row.update(out)
+                if isinstance(output_details.get(fid), dict):
+                    for field_name, detail in output_details[fid].items():
+                        if not isinstance(detail, dict):
+                            continue
+                        loc = detail.get("excerpt_location") if isinstance(detail.get("excerpt_location"), dict) else {}
+                        row[f"{field_name}__confidence"] = detail.get("confidence")
+                        row[f"{field_name}__page"] = loc.get("page")
+                        row[f"{field_name}__excerpt"] = loc.get("sentence")
                 rows.append(row)
 
             if not rows:
@@ -2082,7 +2107,6 @@ elif page == "Export":
 
                 export_id = f"{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}_{short_id()}"
                 base_name = f"export_{export_id}"
-
                 csv_bytes = df.to_csv(index=False).encode("utf-8")
                 csv_path = pp.exports_dir / f"{base_name}.csv"
                 csv_path.write_bytes(csv_bytes)
@@ -2097,7 +2121,10 @@ elif page == "Export":
                 json_path = pp.exports_dir / f"{base_name}.json"
                 write_json(json_path, json_obj)
 
-                append_jsonl(pp.audit, {"ts": now_iso(), "action": "export.create", "project": pp.root.name, "run_id": run.get("run_id"), "scope": scope, "export_id": export_id})
+                append_jsonl(
+                    pp.audit,
+                    {"ts": now_iso(), "action": "export.create", "project": pp.root.name, "run_id": run.get("run_id"), "scope": scope, "export_id": export_id},
+                )
 
                 c1, c2 = st.columns(2)
                 with c1:

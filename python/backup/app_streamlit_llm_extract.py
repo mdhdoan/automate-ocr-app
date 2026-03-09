@@ -22,7 +22,12 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-from llm_extract_core import answer_questions_json, answer_questions_json_chunked
+from llm_extract_core import (
+    answer_questions_json,
+    answer_questions_json_chunked,
+    answer_questions_json_evidence,
+    answer_questions_json_chunked_evidence,
+)
 
 # --- User-provided local OCR module ---
 # Expecting: ocr.py with ocr_image(model, image_path, prompt) + DEFAULT_PROMPT
@@ -34,14 +39,39 @@ except Exception:
 
 # --- User-provided PDF->images module ---
 # Expecting: convert_to_img.py with convert_pdf2img(...)
+
+import sys
+from pathlib import Path
+
+THIS_DIR = Path(__file__).resolve().parent          # .../python
+REPO_ROOT = THIS_DIR.parent                         # .../automate-ocr-app
+
+for p in (str(REPO_ROOT), str(THIS_DIR)):
+    if p not in sys.path:
+        sys.path.insert(0, p)
 try:
     from convert_to_img import convert_pdf2img  # type: ignore
-except Exception:
+
+except ModuleNotFoundError as e:
     convert_pdf2img = None  # type: ignore
+    st.error(f"Module not found: {e}")
+    st.write("CWD:", os.getcwd())
+    st.write("__file__ dir:", str(Path(__file__).resolve().parent))
+    st.write("sys.path (top):", sys.path[:5])
+
+except Exception as e:
+    # This is the big one: shows the real reason (missing pymupdf, etc.)
+    st.exception(e)
+    convert_pdf2img = None
+    raise
+# try:
+#     from convert_to_img import convert_pdf2img  # type: ignore
+# except Exception:
+#     convert_pdf2img = None  # type: ignore
 
 
 # ---------------- Paths ----------------
-DATA_ROOT = Path("/home/doanm/ocr-automate/data")
+DATA_ROOT = Path("./data")
 PROJECTS_ROOT = DATA_ROOT / "streamlit_projects"
 
 
@@ -387,7 +417,7 @@ def extract_pdf_text_pymupdf(pdf_path: Path) -> str | None:
     Returns None if PyMuPDF isn't available or PDF yields no useful text.
     """
     try:
-        import fitz  # type: ignore
+        import pymupdf  # type: ignore
     except Exception:
         return None
 
@@ -395,21 +425,20 @@ def extract_pdf_text_pymupdf(pdf_path: Path) -> str | None:
         return None
 
     try:
-        doc = fitz.open(str(pdf_path))
+        doc = pymupdf.open(str(pdf_path))
         try:
             pieces: list[str] = []
             for i in range(doc.page_count):
                 page = doc.load_page(i)
                 t = (page.get_text("text") or "").strip()
                 if t:
-                    pieces.append(t)
+                    pieces.append(f"===== PAGE {i + 1} ({pdf_path.name}) =====\n{t}")
             out = "\n\n".join(pieces).strip()
             return out if len(out) >= 300 else None
         finally:
             doc.close()
     except Exception:
         return None
-
 
 def extract_text_local_only(
     pp: ProjectPaths,
@@ -691,31 +720,75 @@ def build_context_note(base: str, standard: dict | None, structure_text: str | N
     return "\n\n".join(parts).strip()
 
 
-def normalize_answers(result: Any, questions: list[str]) -> dict[str, Any]:
+def normalize_answer_payload(result: Any, questions: list[str]) -> dict[str, dict[str, Any]]:
     """
-    Handles a few possible shapes:
-    - {"answers": {"0": "...", "1": "..."}}
-    - {"answers": {"question text": "..."}}
-    - {"0": "..."} or {"question text": "..."}
-    - llm_extract_core.py returns {question -> answer}
+    Normalizes both old and new extractor outputs into:
+    {
+      question: {
+        "value": str | None,
+        "confidence": float | None,
+        "excerpt_location": {"page": int | None, "sentence": str | None},
+        "source": str
+      }
+    }
     """
     if isinstance(result, dict):
         ans = result.get("answers") if isinstance(result.get("answers"), dict) else result
-        if not isinstance(ans, dict):
-            return {}
-        out: dict[str, Any] = {}
-        for i, q in enumerate(questions):
-            if q in ans:
-                out[q] = ans.get(q)
-                continue
-            k = str(i)
-            if k in ans:
-                out[q] = ans.get(k)
-                continue
-            out[q] = None
-        return out
-    return {q: None for q in questions}
+    else:
+        ans = {}
 
+    if not isinstance(ans, dict):
+        ans = {}
+
+    def _to_float(v: Any) -> float | None:
+        try:
+            if v is None or str(v).strip() == "":
+                return None
+            return float(str(v).strip())
+        except Exception:
+            return None
+
+    def _to_int(v: Any) -> int | None:
+        try:
+            if v is None or str(v).strip() == "":
+                return None
+            return int(float(str(v).strip()))
+        except Exception:
+            return None
+
+    out: dict[str, dict[str, Any]] = {}
+    for i, q in enumerate(questions):
+        raw = ans.get(q)
+        if raw is None:
+            raw = ans.get(str(i))
+
+        if isinstance(raw, dict):
+            loc = raw.get("excerpt_location") if isinstance(raw.get("excerpt_location"), dict) else {}
+            value = raw.get("value")
+            out[q] = {
+                "value": None if value is None or not str(value).strip() else str(value).strip(),
+                "confidence": _to_float(raw.get("confidence")),
+                "excerpt_location": {
+                    "page": _to_int(loc.get("page")),
+                    "sentence": str(loc.get("sentence") or "").strip() or None,
+                },
+                "source": str(raw.get("source") or "model"),
+            }
+        else:
+            value = None if raw is None or not str(raw).strip() else str(raw).strip()
+            out[q] = {
+                "value": value,
+                "confidence": None,
+                "excerpt_location": {"page": None, "sentence": None},
+                "source": "model",
+            }
+
+    return out
+
+
+def normalize_answers(result: Any, questions: list[str]) -> dict[str, Any]:
+    payload = normalize_answer_payload(result, questions)
+    return {q: payload.get(q, {}).get("value") for q in questions}
 
 def compute_validation_issues(fields: list[dict], answers_by_field: dict[str, Any]) -> dict:
     issues = {"missing_required": [], "format_errors": []}
@@ -1447,6 +1520,7 @@ elif page == "Run Extraction":
                     "outputs": {},
                     "validation": {},
                     "audit": [],
+                    "output_details": {},
                     "params": {
                         "force_chunking": force_chunking,
                         "token_threshold": int(TOKEN_THRESHOLD),
@@ -1533,7 +1607,7 @@ elif page == "Run Extraction":
                         use_chunked = force_chunking or auto_chunk
 
                         if use_chunked:
-                            raw = answer_questions_json_chunked(
+                            raw = answer_questions_json_chunked_evidence(
                                 model=model,
                                 document_text=doc_text,
                                 questions=questions,
@@ -1542,18 +1616,19 @@ elif page == "Run Extraction":
                                 overlap=int(overlap_chars),
                             )
                         else:
-                            raw = answer_questions_json(
+                            raw = answer_questions_json_evidence(
                                 model=model,
                                 document_text=doc_text,
                                 questions=questions,
                                 context_note=ctx_full,
                             )
 
-                        answers_by_question = normalize_answers(raw, questions)
-                        answers_by_field = {q: answers_by_question.get(q) for q in questions}
+                        answer_payload = normalize_answer_payload(raw, questions)
+                        answers_by_field = {q: answer_payload[q]["value"] for q in questions}
                         issues = compute_validation_issues(fields, answers_by_field) if fields else {"missing_required": [], "format_errors": []}
 
                         run_record["outputs"][fid] = answers_by_field
+                        run_record["output_details"][fid] = answer_payload
                         run_record["validation"][fid] = {"status": "unverified", "note": "", "issues": issues}
 
                         run_record["files"].append(
@@ -1604,6 +1679,7 @@ elif page == "Review":
             files = {f["file_id"]: f for f in mf.get("files", []) if f.get("file_id")}
             outputs: dict = run.get("outputs", {}) or {}
             validation: dict = run.get("validation", {}) or {}
+            output_details: dict = run.get("output_details", {}) or {}
 
             standard_file = run.get("standard_file")
             fields_list: list[str] = []
@@ -1695,20 +1771,44 @@ elif page == "Review":
                     if not isinstance(out, dict):
                         out = {}
 
-                    field_rows = (
-                        [{"field": k, "value": ("" if out.get(k) is None else str(out.get(k)))} for k in fields_list]
-                        if fields_list
-                        else [{"field": k, "value": "" if out.get(k) is None else str(out.get(k))} for k in out.keys()]
-                    )
+                    detail_out = output_details.get(fid_choice) or {}
+                    if not isinstance(detail_out, dict):
+                        detail_out = {}
+
+                    field_names = fields_list if fields_list else list(out.keys())
+
+                    field_rows = []
+                    for k in field_names:
+                        d = detail_out.get(k) if isinstance(detail_out.get(k), dict) else {}
+                        loc = d.get("excerpt_location") if isinstance(d.get("excerpt_location"), dict) else {}
+
+                        value = d.get("value") if "value" in d else out.get(k)
+
+                        field_rows.append(
+                            {
+                                "field": k,
+                                "value": "" if value is None else str(value),
+                                "confidence": d.get("confidence"),
+                                "page": loc.get("page"),
+                                "excerpt_sentence": loc.get("sentence") or "",
+                                "source": d.get("source") or "model",
+                            }
+                        )
+
                     fdf = pd.DataFrame(field_rows)
+
                     edited = st.data_editor(
                         fdf,
                         width="stretch",
+                        hide_index=True,
                         column_config={
                             "field": st.column_config.TextColumn(disabled=True),
                             "value": st.column_config.TextColumn(),
+                            "confidence": st.column_config.NumberColumn(disabled=True, format="%.3f"),
+                            "page": st.column_config.NumberColumn(disabled=True),
+                            "excerpt_sentence": st.column_config.TextColumn(disabled=True, width="large"),
+                            "source": st.column_config.TextColumn(disabled=True),
                         },
-                        hide_index=True,
                     )
 
                 with right:
@@ -1963,19 +2063,48 @@ elif page == "Review":
 
                     save_btn = st.button("Save changes", type="primary")
                     if save_btn:
-                        new_out = dict(out)
+                        new_out: dict[str, Any] = {}
+                        new_detail_out: dict[str, Any] = {}
+
+                        before = outputs.get(fid_choice) or {}
+                        changed_fields: list[str] = []
+
                         for _, r in edited.iterrows():
                             k = str(r["field"]).strip()
                             v = str(r["value"]).strip()
-                            new_out[k] = v if v else None
+                            new_v = v if v else None
+
+                            old_detail = detail_out.get(k) if isinstance(detail_out.get(k), dict) else {}
+                            old_v = old_detail.get("value")
+
+                            changed = str(old_v or "") != str(new_v or "")
+                            if changed:
+                                changed_fields.append(k)
+                                new_detail_out[k] = {
+                                    "value": new_v,
+                                    "confidence": None,
+                                    "excerpt_location": {"page": None, "sentence": None},
+                                    "source": "manual_review",
+                                }
+                            else:
+                                new_detail_out[k] = {
+                                    "value": new_v,
+                                    "confidence": old_detail.get("confidence"),
+                                    "excerpt_location": old_detail.get("excerpt_location") if isinstance(old_detail.get("excerpt_location"), dict) else {"page": None, "sentence": None},
+                                    "source": old_detail.get("source") or "model",
+                                }
+
+                            new_out[k] = new_v
 
                         if status == "flagged" and not note.strip():
                             st.error("Flagged requires a note/reason.")
                         else:
-                            before = outputs.get(fid_choice) or {}
                             outputs[fid_choice] = new_out
+                            output_details[fid_choice] = new_detail_out
                             validation[fid_choice] = {"status": status, "note": note, "issues": issues, "updated_at": now_iso()}
+
                             run["outputs"] = outputs
+                            run["output_details"] = output_details
                             run["validation"] = validation
 
                             run["audit"] = run.get("audit") or []
@@ -1984,7 +2113,7 @@ elif page == "Review":
                                     "ts": now_iso(),
                                     "action": "review.save",
                                     "file_id": fid_choice,
-                                    "changed_fields": [k for k in new_out.keys() if str(before.get(k)) != str(new_out.get(k))],
+                                    "changed_fields": changed_fields,
                                     "status": status,
                                 }
                             )
@@ -1993,7 +2122,15 @@ elif page == "Review":
                             write_json(run_path, run)
                             append_jsonl(
                                 pp.audit,
-                                {"ts": now_iso(), "action": "run.update_file", "project": pp.root.name, "run_id": run.get("run_id"), "file_id": fid_choice, "status": status, "note": note},
+                                {
+                                    "ts": now_iso(),
+                                    "action": "run.update_file",
+                                    "project": pp.root.name,
+                                    "run_id": run.get("run_id"),
+                                    "file_id": fid_choice,
+                                    "status": status,
+                                    "note": note,
+                                },
                             )
                             st.success("Saved.")
                             st.rerun()
