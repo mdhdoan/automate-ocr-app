@@ -477,7 +477,7 @@ ui <- fluidPage(
   "))
 ),
 
-titlePanel("Doc Flow - The Current: Local OCR & Field Extraction (Mistral / DeepSeek OCR + GPT-OSS)"),
+titlePanel("TIDE - Text Intelligence and Document Extraction (running via Mistral OCR / DeepSeek OCR and GPT-OSS)"),
   
   sidebarLayout(
     sidebarPanel(

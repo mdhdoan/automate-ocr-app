@@ -33,7 +33,7 @@ def convert_pdf2img(
 ) -> list[str]:
     os.makedirs(out_dir, exist_ok=True)
 
-    pdf = PyMuPDF.open(input_file)
+    pdf = pymupdf.open(input_file)
     output_files: list[str] = []
     try:
         total_pages = pdf.page_count
@@ -46,7 +46,7 @@ def convert_pdf2img(
                 continue
 
             page = pdf[pg]
-            mat = PyMuPDF.Matrix(zoom, zoom).prerotate(rotate)
+            mat = pymupdf.Matrix(zoom, zoom).prerotate(rotate)
             pix = page.get_pixmap(matrix=mat, alpha=False)  # type: ignore
 
             page_str = str(pg + 1).zfill(width)

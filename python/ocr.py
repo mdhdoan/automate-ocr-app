@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 from collections import defaultdict
 from ollama import chat
+import pymupdf
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 DEFAULT_PROMPT = "Extract all readable text from this image. Return plain text only."
