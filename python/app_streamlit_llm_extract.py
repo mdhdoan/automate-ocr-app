@@ -452,21 +452,24 @@ def extract_text_local_only(
             return None, "txt", f"Failed to read txt: {e}"
 
     if suf == ".pdf":
-        t = extract_pdf_text_pymupdf(stored_path)
-        if t:
-            if build_previews:
-                _imgs, _err = build_pdf_previews(
-                    pp, file_record, zoom=pdf_zoom, rotate=pdf_rotate, max_pages=pdf_max_pages, force=False
-                )
-                if _imgs:
-                    file_record["preview_images_count"] = len(_imgs)
-                    file_record["preview_dir"] = str(_preview_dir_for_file(pp, str(file_record.get("file_id") or "")))
-                    file_record["preview_error"] = None
-                else:
-                    file_record["preview_images_count"] = 0
-                    file_record["preview_dir"] = str(_preview_dir_for_file(pp, str(file_record.get("file_id") or "")))
-                    file_record["preview_error"] = _err
-            return t, "pymupdf_text", None
+        force_pdf_ocr = True  # test only
+
+        if not force_pdf_ocr:
+            t = extract_pdf_text_pymupdf(stored_path)
+            if t:
+                if build_previews:
+                    _imgs, _err = build_pdf_previews(
+                        pp, file_record, zoom=pdf_zoom, rotate=pdf_rotate, max_pages=pdf_max_pages, force=False
+                    )
+                    if _imgs:
+                        file_record["preview_images_count"] = len(_imgs)
+                        file_record["preview_dir"] = str(_preview_dir_for_file(pp, str(file_record.get("file_id") or "")))
+                        file_record["preview_error"] = None
+                    else:
+                        file_record["preview_images_count"] = 0
+                        file_record["preview_dir"] = str(_preview_dir_for_file(pp, str(file_record.get("file_id") or "")))
+                        file_record["preview_error"] = _err
+                return t, "pymupdf_text", None
 
         if ocr_image is None:
             return None, "ollama_ocr_pdf", "ocr.py is not importable (ocr_image missing)."

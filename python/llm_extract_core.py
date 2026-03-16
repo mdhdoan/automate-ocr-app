@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import json
 import re
-from difflib import SequenceMatcher
+import sys
 from typing import Any, Dict, List, Optional
-
+from datetime import datetime
 from ollama import chat
+
+
+MODEL_CANNOT_SCORE = "model is not capable of giving confidence score"
+DEBUG_OLLAMA = True
 
 
 SYSTEM_PROMPT = """You are an information extraction assistant.
@@ -31,7 +35,7 @@ Rules:
 """
 
 
-EVIDENCE_SYSTEM_PROMPT = """You are an information extraction assistant.
+EVIDENCE_SYSTEM_PROMPT = f"""You are an information extraction assistant.
 
 You will receive:
 - A context note
@@ -39,25 +43,28 @@ You will receive:
 - A JSON list of questions with ids
 
 Return ONLY valid JSON, and ONLY this structure:
-{
-  "answers": {
-    "<id>": {
+{{
+  "answers": {{
+    "<id>": {{
       "value": <string or null>,
       "confidence": <number between 0 and 1 or null>,
-      "excerpt_location": {
+      "confidence_note": <string or null>,
+      "excerpt_location": {{
         "page": <integer or null>,
         "sentence": <string or null>
-      }
-    }
-  }
-}
+      }}
+    }}
+  }}
+}}
 
 Rules:
 - Use only evidence from the document text.
 - If not present / not inferable, use null for value.
 - page must come from explicit page markers in the document text, such as:
   ===== PAGE 7 =====
-- sentence must be the shortest supporting sentence copied from the document text.
+- sentence must be copied from the document text if provided.
+- Do not invent or estimate confidence scores in Python.
+- If the model cannot provide a true confidence score, set confidence to null and confidence_note to "{MODEL_CANNOT_SCORE}".
 - Do not add extra keys.
 - No markdown, no explanation.
 """
@@ -67,6 +74,81 @@ _PAGE_MARKER_RE = re.compile(
     r"^=+\s*PAGE\s+(\d+)\b[^\n]*=+\s*$",
     flags=re.MULTILINE | re.IGNORECASE,
 )
+
+RAW_OLLAMA_LOG = "ollama_raw_calls.jsonl"
+
+
+def _resp_to_jsonable(resp: Any) -> Any:
+    if hasattr(resp, "model_dump"):
+        try:
+            return resp.model_dump()
+        except Exception:
+            pass
+    if isinstance(resp, dict):
+        return resp
+    return str(resp)
+
+
+def _log_ollama_call(tag: str, model: str, payload: dict, resp: Any) -> None:
+    record = {
+        "ts": datetime.utcnow().isoformat() + "Z",
+        "tag": tag,
+        "model": model,
+        "request": payload,
+        "response": _resp_to_jsonable(resp),
+        "response_content": _extract_chat_content(resp),
+    }
+
+    print(f"\n===== {tag} =====")
+    try:
+        print(json.dumps(record, indent=2, ensure_ascii=False)[:30000])
+    except Exception:
+        print(record)
+    sys.stdout.flush()
+
+    with open(RAW_OLLAMA_LOG, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+def _debug_print(label: str, data: Any, max_chars: int = 20000) -> None:
+    if not DEBUG_OLLAMA:
+        return
+    print(f"\n===== {label} =====")
+    try:
+        if isinstance(data, (dict, list)):
+            txt = json.dumps(data, indent=2, ensure_ascii=False)
+        else:
+            txt = str(data)
+        print(txt[:max_chars] + ("\n...[truncated]" if len(txt) > max_chars else ""))
+    except Exception as e:
+        print(f"[debug print failed] {e}")
+    sys.stdout.flush()
+
+
+def _extract_chat_content(resp: Any) -> str:
+    content = getattr(getattr(resp, "message", None), "content", None)
+    if content is not None:
+        return content or ""
+    if isinstance(resp, dict):
+        return (resp.get("message") or {}).get("content", "") or ""
+    return str(resp)
+
+
+def _extract_logprobs(resp: Any) -> Any:
+    if hasattr(resp, "logprobs"):
+        try:
+            return resp.logprobs
+        except Exception:
+            pass
+    if isinstance(resp, dict):
+        return resp.get("logprobs")
+    if hasattr(resp, "model_dump"):
+        try:
+            dumped = resp.model_dump()
+            if isinstance(dumped, dict):
+                return dumped.get("logprobs")
+        except Exception:
+            pass
+    return None
 
 
 def extract_json_object(text: str) -> Optional[str]:
@@ -123,18 +205,35 @@ def safe_load_json_from_model(text: str) -> Dict[str, Any]:
 
 def _repair_to_json(model: str, bad_text: str) -> Dict[str, Any]:
     repair_system = "You output ONLY valid JSON. No markdown. No extra text."
-    resp = chat(
-        model=model,
-        messages=[
+
+    payload = {
+        "messages": [
             {"role": "system", "content": repair_system},
             {"role": "user", "content": f"Fix this into valid JSON only:\n\n{bad_text}"},
         ],
-        options={"temperature": 0.0},
+        "options": {"temperature": 0.0},
+        "format": "json",
+        "stream": False,
+    }
+
+    resp = chat(
+        model=model,
+        messages=payload["messages"],
+        options=payload["options"],
+        format=payload["format"],
+        stream=payload["stream"],
     )
+
+    _log_ollama_call(
+        tag="_repair_to_json",
+        model=model,
+        payload=payload,
+        resp=resp,
+    )
+
     content = getattr(getattr(resp, "message", None), "content", None) or ""
     parsed = safe_load_json_from_model(content)
     return parsed if isinstance(parsed, dict) else {}
-
 
 def _normalize_question_for_model(q: str) -> str:
     q2 = (q or "").strip()
@@ -166,13 +265,6 @@ def _norm_ws(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "")).strip()
 
 
-def _norm_match(s: str) -> str:
-    s = _norm_ws(s).lower()
-    s = re.sub(r"[^\w\s]", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
-
-
 def _page_segments(text: str) -> list[dict[str, Any]]:
     text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
     matches = list(_PAGE_MARKER_RE.finditer(text))
@@ -187,92 +279,35 @@ def _page_segments(text: str) -> list[dict[str, Any]]:
     return out
 
 
-def _candidate_sentences(text: str) -> list[str]:
-    seen: set[str] = set()
-    out: list[str] = []
-
-    for raw_line in re.split(r"[\r\n]+", text or ""):
-        line = _norm_ws(raw_line)
-        if not line:
-            continue
-
-        parts = [line] + re.split(r"(?<=[.!?])\s+", line)
-        for part in parts:
-            cand = _norm_ws(part)
-            if not cand:
-                continue
-            key = _norm_match(cand)
-            if key and key not in seen:
-                seen.add(key)
-                out.append(cand)
-
-    return out
-
-
-def _locate_excerpt(document_text: str, sentence: str | None, hinted_page: int | None) -> dict[str, Any]:
-    sent = _norm_ws(sentence or "")
-    if not sent:
-        return {"page": hinted_page, "sentence": None}
-
-    segments = _page_segments(document_text)
-    if hinted_page is not None:
-        segments = sorted(segments, key=lambda d: 0 if d.get("page") == hinted_page else 1)
-
-    target = _norm_match(sent)
-
-    for seg in segments:
-        for cand in _candidate_sentences(seg.get("text", "")):
-            if _norm_match(cand) == target:
-                return {"page": seg.get("page"), "sentence": cand}
-
-    best_soft: tuple[float, int | None, str] | None = None
-    for seg in segments:
-        for cand in _candidate_sentences(seg.get("text", "")):
-            ck = _norm_match(cand)
-            if not ck or not target:
-                continue
-            if target in ck or ck in target:
-                score = min(len(target), len(ck)) / max(len(target), len(ck))
-                if best_soft is None or score > best_soft[0]:
-                    best_soft = (score, seg.get("page"), cand)
-
-    if best_soft and best_soft[0] >= 0.88:
-        return {"page": best_soft[1], "sentence": best_soft[2]}
-
-    best_fuzzy: tuple[float, int | None, str] | None = None
-    for seg in segments:
-        for cand in _candidate_sentences(seg.get("text", "")):
-            ratio = SequenceMatcher(None, target, _norm_match(cand)).ratio()
-            if best_fuzzy is None or ratio > best_fuzzy[0]:
-                best_fuzzy = (ratio, seg.get("page"), cand)
-
-    if best_fuzzy and best_fuzzy[0] >= 0.82:
-        return {"page": best_fuzzy[1], "sentence": best_fuzzy[2]}
-
-    return {"page": hinted_page, "sentence": sent}
-
-
 def _coerce_rich_answer(raw: Any) -> dict[str, Any]:
     if isinstance(raw, dict):
         value = raw.get("value", raw.get("answer"))
         confidence = _as_float(raw.get("confidence"))
+        confidence_note = raw.get("confidence_note")
         loc = raw.get("excerpt_location") if isinstance(raw.get("excerpt_location"), dict) else {}
         page = _as_int(loc.get("page") if loc else raw.get("page"))
         sentence = loc.get("sentence") if loc else raw.get("sentence", raw.get("excerpt"))
     else:
         value = raw
         confidence = None
+        confidence_note = None
         page = None
         sentence = None
 
     value = None if value is None or not str(value).strip() else str(value).strip()
+    confidence_note = _norm_ws(str(confidence_note)) if confidence_note else None
+    sentence = _norm_ws(str(sentence)) if sentence else None
+
+    if value is not None and confidence is None and not confidence_note:
+        confidence_note = MODEL_CANNOT_SCORE
 
     return {
         "value": value,
         "confidence": confidence,
+        "confidence_note": confidence_note,
         "excerpt_location": {
             "page": page,
-            "sentence": _norm_ws(str(sentence)) if sentence else None,
+            "sentence": sentence,
         },
     }
 
@@ -287,10 +322,11 @@ def _rich_answer_score(item: dict[str, Any]) -> float:
 
     conf = _as_float(item.get("confidence")) or 0.0
     loc = item.get("excerpt_location") if isinstance(item.get("excerpt_location"), dict) else {}
-    page_bonus = 0.05 if loc.get("page") is not None else 0.0
-    sent_bonus = 0.05 if loc.get("sentence") else 0.0
+    page_bonus = 0.15 if loc.get("page") is not None else 0.0
+    sent_bonus = 0.20 if loc.get("sentence") else 0.0
     len_bonus = min(len(str(value).strip()), 60) / 1000.0
-    return conf + page_bonus + sent_bonus + len_bonus
+
+    return 1.0 + (conf * 0.25) + page_bonus + sent_bonus + len_bonus
 
 
 def answer_questions_json(
@@ -320,17 +356,42 @@ def answer_questions_json(
         "</doc>\n\n"
         "Return JSON now."
     )
-
-    resp = chat(
-        model=model,
-        messages=[
+    payload = {
+        "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
         ],
-        options={"temperature": temperature},
+        "options": {"temperature": temperature},
+        "format": "json",
+        "stream": False,
+    }
+
+    resp = chat(
+        model=model,
+        messages=payload["messages"],
+        options=payload["options"],
+        format=payload["format"],
+        stream=payload["stream"],
     )
-    content = getattr(getattr(resp, "message", None), "content", None) or ""
+    _log_ollama_call(
+        tag="answer_questions_json",
+        model=model,
+        payload=payload,
+        resp=resp,
+    )
+    _debug_print("EXTRACTION RAW RESPONSE (simple)", _resp_to_jsonable(resp))
+    logprobs = _extract_logprobs(resp)
+    if logprobs:
+        _debug_print("EXTRACTION LOGPROBS (simple)", logprobs)
+    else:
+        _debug_print("EXTRACTION CONFIDENCE NOTE (simple)", MODEL_CANNOT_SCORE)
+
+    content = _extract_chat_content(resp)
+    _debug_print("EXTRACTION MESSAGE CONTENT (simple)", content)
+
     parsed = safe_load_json_from_model(content)
+    _debug_print("EXTRACTION PARSED JSON (simple)", parsed)
+
     if not isinstance(parsed, dict) or not parsed:
         parsed = _repair_to_json(model, content)
 
@@ -380,18 +441,42 @@ def answer_questions_json_evidence(
         "</doc>\n\n"
         "Return JSON now."
     )
+    payload = {
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+        "options": {"temperature": temperature},
+        "format": "json",
+        "stream": False,
+    }
 
     resp = chat(
         model=model,
-        messages=[
-            {"role": "system", "content": EVIDENCE_SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-        options={"temperature": temperature},
+        messages=payload["messages"],
+        options=payload["options"],
+        format=payload["format"],
+        stream=payload["stream"],
     )
+    _log_ollama_call(
+        tag="answer_questions_json_evidence",
+        model=model,
+        payload=payload,
+        resp=resp,
+    )
+    _debug_print("EXTRACTION RAW RESPONSE (evidence)", _resp_to_jsonable(resp))
+    logprobs = _extract_logprobs(resp)
+    if logprobs:
+        _debug_print("EXTRACTION LOGPROBS (evidence)", logprobs)
+    else:
+        _debug_print("EXTRACTION CONFIDENCE NOTE (evidence)", MODEL_CANNOT_SCORE)
 
-    content = getattr(getattr(resp, "message", None), "content", None) or ""
+    content = _extract_chat_content(resp)
+    _debug_print("EXTRACTION MESSAGE CONTENT (evidence)", content)
+
     parsed = safe_load_json_from_model(content)
+    _debug_print("EXTRACTION PARSED JSON (evidence)", parsed)
+
     if not isinstance(parsed, dict) or not parsed:
         parsed = _repair_to_json(model, content)
 
@@ -411,28 +496,13 @@ def answer_questions_json_evidence(
             raw = answers.get(key.rstrip(":").strip())
 
         item = _coerce_rich_answer(raw)
-        if item["value"] is None:
-            out[key] = {
-                "value": None,
-                "confidence": 0.0,
-                "excerpt_location": {"page": None, "sentence": None},
-            }
-            continue
-
-        hinted_page = item.get("excerpt_location", {}).get("page")
-        hinted_sentence = item.get("excerpt_location", {}).get("sentence")
-        verified_loc = _locate_excerpt(document_text, hinted_sentence, hinted_page)
-
-        conf = item.get("confidence")
-        if conf is None:
-            conf = 0.9 if verified_loc.get("sentence") else 0.55
-
         out[key] = {
             "value": item["value"],
-            "confidence": round(max(0.0, min(1.0, conf)), 3),
+            "confidence": item["confidence"],
+            "confidence_note": item["confidence_note"],
             "excerpt_location": {
-                "page": verified_loc.get("page"),
-                "sentence": verified_loc.get("sentence"),
+                "page": item["excerpt_location"].get("page"),
+                "sentence": item["excerpt_location"].get("sentence"),
             },
         }
 
@@ -509,6 +579,8 @@ def answer_questions_json_chunked(
     chunks = _chunk_text(document_text, max_chars=max_chars, overlap=overlap)
 
     for idx, ch in enumerate(chunks, start=1):
+        _debug_print("PROCESSING CHUNK (simple)", f"{idx}/{len(chunks)}")
+
         partial = answer_questions_json(
             model=model,
             document_text=f"[CHUNK {idx}/{len(chunks)}]\n{ch}",
@@ -541,7 +613,8 @@ def answer_questions_json_chunked_evidence(
     merged: Dict[str, Dict[str, Any]] = {
         q: {
             "value": None,
-            "confidence": 0.0,
+            "confidence": None,
+            "confidence_note": None,
             "excerpt_location": {"page": None, "sentence": None},
         }
         for q in qs
@@ -550,6 +623,8 @@ def answer_questions_json_chunked_evidence(
     chunks = _chunk_text(document_text, max_chars=max_chars, overlap=overlap)
 
     for idx, ch in enumerate(chunks, start=1):
+        _debug_print("PROCESSING CHUNK (evidence)", f"{idx}/{len(chunks)}")
+
         partial = answer_questions_json_evidence(
             model=model,
             document_text=ch,

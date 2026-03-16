@@ -4,12 +4,15 @@
 #   python ocr.py gemma3 data/test_images --recursive
 #   python ocr.py gemma3 data/test_images --prompt "Extract all readable text. Return plain text only."
 
+import json
 import sys
 import re
 from pathlib import Path
 from collections import defaultdict
+from datetime import datetime
+from typing import Any
+
 from ollama import chat
-import pymupdf
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 DEFAULT_PROMPT = "Extract all readable text from this image. Return plain text only."
@@ -17,25 +20,85 @@ DEFAULT_PROMPT = "Extract all readable text from this image. Return plain text o
 # Finds occurrences like "_page12" or "-page12" anywhere in the stem
 PAGE_PAT = re.compile(r"(?i)([_-])page(?P<page>\d+)\b")
 
+# Same log file used by llm_extract_core.py
+RAW_OLLAMA_LOG = Path("ollama_raw_calls.jsonl")
+
+
+def _resp_to_jsonable(resp: Any) -> Any:
+    if hasattr(resp, "model_dump"):
+        try:
+            return resp.model_dump()
+        except Exception:
+            pass
+    if isinstance(resp, dict):
+        return resp
+    return str(resp)
+
+
+def _extract_content(resp: Any) -> str:
+    if hasattr(resp, "message") and hasattr(resp.message, "content"):
+        return resp.message.content or ""
+    if isinstance(resp, dict):
+        return (resp.get("message") or {}).get("content", "") or ""
+    return str(resp)
+
+
+def _log_ollama_call(tag: str, model: str, payload: dict, resp: Any) -> None:
+    raw_response = _resp_to_jsonable(resp)
+    response_content = _extract_content(resp)
+
+    record = {
+        "ts": datetime.utcnow().isoformat() + "Z",
+        "tag": tag,
+        "model": model,
+        "request": payload,
+        "response": raw_response,
+        "response_content": response_content,
+    }
+
+    print(f"\n===== {tag} =====")
+    try:
+        print(json.dumps(record, indent=2, ensure_ascii=False)[:30000])
+    except Exception:
+        print(record)
+    sys.stdout.flush()
+
+    with RAW_OLLAMA_LOG.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
 
 def ocr_image(model: str, image_path: Path, prompt: str) -> str:
-    resp = chat(
-        model=model,
-        messages=[
+    payload = {
+        "messages": [
             {
                 "role": "user",
                 "content": prompt,
                 "images": [str(image_path)],
             }
         ],
-        options={"temperature": 0.0},
+        "options": {"temperature": 0.0},
+        "stream": False,
+    }
+
+    resp = chat(
+        model=model,
+        messages=payload["messages"],
+        options=payload["options"],
+        stream=payload["stream"],
     )
 
-    if hasattr(resp, "message") and hasattr(resp.message, "content"):
-        return resp.message.content or ""
-    if isinstance(resp, dict):
-        return (resp.get("message") or {}).get("content", "") or ""
-    return str(resp)
+    _log_ollama_call(
+        tag="ocr_image",
+        model=model,
+        payload={
+            "image_path": str(image_path),
+            "prompt": prompt,
+            **payload,
+        },
+        resp=resp,
+    )
+
+    return _extract_content(resp)
 
 
 def doc_key_and_page(stem: str) -> tuple[str, int]:
@@ -86,7 +149,6 @@ def main():
     out_dir = Path(str(in_dir) + "_ocrtext")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Collect images
     if recursive:
         images = [p for p in in_dir.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTS]
     else:
@@ -96,7 +158,6 @@ def main():
         print(f"No images found in {in_dir} (extensions: {sorted(IMAGE_EXTS)})")
         sys.exit(0)
 
-    # Group images by doc key and page number
     groups = defaultdict(list)
     for img in images:
         doc_key, page_num = doc_key_and_page(img.stem)
@@ -117,7 +178,6 @@ def main():
             try:
                 text = ocr_image(model=model, image_path=img, prompt=prompt).strip()
 
-                # If we found a page number, label as PAGE N; otherwise just label IMAGE
                 if page_num > 0:
                     merged_parts.append(f"\n\n===== PAGE {page_num} ({img.name}) =====\n{text}\n")
                 else:
@@ -127,7 +187,7 @@ def main():
             except Exception as e:
                 fail_pages += 1
                 merged_parts.append(
-                    f"\n\n===== PAGE {page_num if page_num>0 else '?'} ({img.name}) OCR FAILED =====\n{e}\n"
+                    f"\n\n===== PAGE {page_num if page_num > 0 else '?'} ({img.name}) OCR FAILED =====\n{e}\n"
                 )
                 print(f"[FAIL] {doc} :: {img} -> {e}")
 
@@ -136,11 +196,12 @@ def main():
         ok_docs += 1
         print(f"[MERGED] {doc} -> {out_path.name} ({len(pages)} page(s))")
 
-    print(f"\nDone.")
+    print("\nDone.")
     print(f"Documents merged: {ok_docs}")
     print(f"Pages processed: {total_pages}")
     print(f"Page failures: {fail_pages}")
     print(f"Output folder: {out_dir}")
+    print(f"Raw Ollama log: {RAW_OLLAMA_LOG.resolve()}")
 
 
 if __name__ == "__main__":

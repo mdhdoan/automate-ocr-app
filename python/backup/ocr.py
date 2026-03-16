@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 from collections import defaultdict
 from ollama import chat
+import pymupdf
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 DEFAULT_PROMPT = "Extract all readable text from this image. Return plain text only."
@@ -31,6 +32,11 @@ def ocr_image(model: str, image_path: Path, prompt: str) -> str:
     )
 
     if hasattr(resp, "message") and hasattr(resp.message, "content"):
+        print("\n===== OCR RAW RESPONSE OBJECT =====")
+        print(resp)
+        print("\n===== OCR MESSAGE CONTENT =====")
+        print(resp.message.content or "")
+        sys.stdout.flush()
         return resp.message.content or ""
     if isinstance(resp, dict):
         return (resp.get("message") or {}).get("content", "") or ""
